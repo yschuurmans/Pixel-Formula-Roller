@@ -5,27 +5,31 @@
 
 ## Project Overview
 
-Mobile-first PWA that connects to [Pixels electronic dice](https://gamewithpixels.com/) over Web Bluetooth. Users build dice formulas visually or via text, roll them, and the matching physical dice light up. Results are collected and displayed with a per-die breakdown.
+Android-only mobile app that connects to [Pixels electronic dice](https://gamewithpixels.com/) over native Android BLE. The React UI remains, but Bluetooth moves behind a native Android bridge so the app can auto-connect detectable remembered dice on launch and resume.
 
 ## Tech Stack
 
 | Layer | Choice |
 |-------|--------|
 | Framework | React + Vite (TypeScript strict) |
+| Android shell | Capacitor + Android Studio |
 | Styling | Tailwind CSS + Press Start 2P font (pixel-art theme) |
 | State | Zustand with `persist` middleware |
 | Routing | React Router v6 |
-| Bluetooth | `@systemic-games/pixels-web-connect` (official Pixels SDK) |
+| Bluetooth | Native Android BLE via a Capacitor bridge implemented in Kotlin |
 | Formula parsing | `rpg-dice-roller` (wrapped in `src/services/formulaParser.ts`) |
 | Date formatting | `date-fns` (formatDistanceToNow for history timestamps) |
-| Persistence | Local Storage (no backend for MVP) |
+| Persistence | On-device storage via Capacitor/Android-backed persistence |
 | Tests | Vitest |
 
-## Browser Support
-- Chrome / Edge (Android, Windows, macOS) — native Web Bluetooth
-- Linux Chrome — requires `chrome://flags/#enable-web-bluetooth`
-- iOS — requires Bluefy browser
-- Firefox / Safari — Web Bluetooth unsupported; app shows guidance banner
+## Platform Support
+- Android phones and tablets only for MVP
+- Development hosts: Windows, macOS, Linux via Android Studio + ADB
+- Web / PWA, iOS, and desktop runtime are out of scope after the platform pivot
+
+## Target Architecture Note
+- The product spec targets Android-only behavior.
+- Future Bluetooth work should converge on a platform BLE adapter backed by a native Android bridge.
 
 ## Canonical Die Type
 Internal token: `"d4" | "d6" | "d8" | "d10" | "d12" | "d20" | "d100"` (DieType in `src/types/formula.ts`)
@@ -46,7 +50,7 @@ docs/
 src/
   services/
     formulaParser.ts             # rpg-dice-roller wrapper
-    pixelsService.ts             # Web Bluetooth / Pixels SDK wrapper
+    pixelsService.ts             # BLE service facade; migrate to Android platform bridge
   stores/
     useAppStore.ts               # Zustand store (formulas, history, settings, pixels)
   types/
@@ -62,17 +66,19 @@ src/
 
 | Story | Description | Depends on |
 |-------|-------------|------------|
-| **STORY-000** | Spike — validate rpg-dice-roller injection, d% range, round-trip, Windows BLE | — |
-| **STORY-001** | Project setup & scaffolding | — |
+| **STORY-000** | Spike — validate rpg-dice-roller injection, d% range, round-trip, Android BLE behavior | — |
+| **STORY-001** | Project setup & Android scaffolding | — |
 | **STORY-002** | Formula parser service | 000, 001 |
-| **STORY-003** | Bluetooth/Pixels service layer | 000, 001 |
+| **STORY-003** | Android BLE / Pixels service layer | 000, 001 |
 | **STORY-004** | Main Screen UI | 001 (parallel with 002, 003) |
+| **STORY-007** | Settings screen + hardware verification | 001, 003 |
 | **STORY-005** | Formula Screen — picker + text input | 001, 002 |
 | **STORY-006a** | Roll engine — glow, collect, evaluate | 002, 003, 005 |
 | **STORY-006b** | Result Panel — display, Roll Again, history | 006a |
-| **STORY-007** | Settings screen | 001, 003 |
 | **STORY-009** | Manual roll entry fallback | 003, 006a |
-| **STORY-008** | Docker & Docker Compose | 001 (implement last) |
+| **STORY-008** | Android packaging & direct device-run workflow | 001 |
+
+For hardware-first verification, STORY-007 is intentionally pulled ahead of STORY-005/006 so BLE pairing, auto-reconnect, disconnect, battery reporting, and recent settled-roll events can be tested on real dice before the formula flow is finished.
 
 ## Key Design Decisions (resolved from BA review)
 
@@ -90,13 +96,14 @@ src/
 | d% / d100 | Canonical internal token: `"d100"`; SDK `"d00"` mapped at BLE boundary |
 | Pixels Zustand slice | `Record<string, PixelEntry>` (plain object), excluded from persist |
 | Result Panel layout | Bottom sheet on mobile (< 768px), modal on desktop (≥ 768px) |
+| Launch behaviour | On app launch/resume, auto-connect all detectable remembered dice |
 
 ## Open Questions (pending STORY-000 spike)
 
 1. **rpg-dice-roller injection** — can it accept pre-rolled values? → Update STORY-002 evaluateFormula after spike
-2. **d100 face range** — 1–100 or 0–99 from SDK? → Update STORY-002 after spike
+2. **d100 face range** — 1–100 or 0–99 from Android BLE events? → Update STORY-002 after device validation
 3. **Formula round-trip** — does rpg-dice-roller normalise strings? → Update STORY-002 after spike
-4. **Windows reconnect** — does SDK expose `repeatConnect()`? → Update STORY-003 after spike
+4. **Android reconnect window** — how long should startup auto-connect scan before surfacing dice as offline? → Update STORY-003 after hardware validation
 
 ## Development Guidelines
 
@@ -110,19 +117,22 @@ src/
 ## Commands
 
 ```bash
-# Development (no Docker)
+# Development
 npm install          # Install dependencies
-npm run dev          # Start Vite dev server (http://localhost:5173)
+npm run dev          # Start the UI asset host used by Android live reload
 npm test             # Run Vitest tests
 npm run build        # Production build → dist/
 
-# Production (Docker)
-cp .env.example .env
-docker compose up --build    # nginx on port 80 (or APP_PORT)
-docker compose down
+# Android shell
+npx cap sync android                 # Sync web assets/config into Android project
+npx cap open android                 # Open Android Studio
+adb devices                          # Verify connected phone/debug target
+npx cap run android --target <id>    # Build, install, and launch on device
+npx cap run android --target <id> -l --external   # Optional live reload on device
 ```
 
 ## Deployment Notes
 
-- Production runs as a static nginx container — no backend, no database.
-- **Web Bluetooth requires HTTPS** in production. Use Caddy or nginx + Certbot in front of the Docker container for any non-localhost deployment.
+- The target deliverable is an Android APK/AAB, not a Docker deployment.
+- Normal developer workflow should be direct build/install/run to a connected phone via Android Studio or `npx cap run android --target <id>`.
+- Avoid any workflow that depends on manually copying APK files to the device.

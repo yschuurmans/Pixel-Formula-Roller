@@ -114,6 +114,7 @@ export function parseFormula(formula: string): ParsedFormula | null {
 
   while ((match = TOKEN_RE.exec(canonical)) !== null) {
     // Groups: [full, diceSign, countStr, sidesStr, keepMode, keepNStr, flatStr]
+    const diceSign = match[1]?.replace(/\s/g, '') ?? '';
     const countStr = match[2];
     const sidesStr = match[3];
     const keepMode = match[4];
@@ -121,6 +122,10 @@ export function parseFormula(formula: string): ParsedFormula | null {
     const flatStr = match[6];
 
     if (countStr !== undefined && sidesStr !== undefined) {
+      if (diceSign === '-') {
+        return null;
+      }
+
       // Dice group token
       const sidesValue = sidesStr === '%' ? '%' : parseInt(sidesStr, 10);
       const dieType = sidesToDieType(sidesValue);

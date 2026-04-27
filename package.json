@@ -6,8 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "android:sync": "npx cap sync android",
+    "android:open": "npx cap open android",
     "lint": "eslint .",
-    "preview": "vite preview",
     "test": "vitest run"
   },
   "dependencies": {

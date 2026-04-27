@@ -128,6 +128,14 @@ describe('parseFormula', () => {
       expect(parseFormula('2d')).toBeNull();
     });
 
+    it('returns null for subtraction of a dice group', () => {
+      expect(parseFormula('1d6-1d4')).toBeNull();
+    });
+
+    it('returns null for trailing garbage after a valid group', () => {
+      expect(parseFormula('2d6foo')).toBeNull();
+    });
+
     it('returns null for unsupported die type (d3)', () => {
       expect(parseFormula('1d3')).toBeNull();
     });

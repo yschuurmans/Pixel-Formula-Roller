@@ -1,0 +1,368 @@
+import {
+  Color,
+  getBluetoothCapabilities,
+  getPixel,
+  requestPixel,
+  repeatConnect,
+  type Pixel,
+  type PixelStatusEvent,
+} from '@systemic-games/pixels-web-connect'
+import type { DieType } from '../types/formula'
+import { useAppStore } from '../stores/useAppStore'
+
+const ROLL_DEDUP_MS = 300
+const PERMISSION_DENIED_MESSAGE = "Bluetooth permission denied. Tap 'Connect' to try again."
+const NO_PAIRED_DICE_MESSAGE = 'No paired dice available. Connect a die first.'
+const NO_RECONNECTABLE_DICE_MESSAGE = 'No paired dice were available to reconnect.'
+const SILENT_RECONNECT_UNAVAILABLE_MESSAGE = "Automatic reconnect is unavailable in this build. Tap 'Reconnect paired dice' or 'Connect new die' to select the die again."
+
+export const BLE_UNAVAILABLE_MESSAGES = {
+  unavailable: 'Bluetooth is unavailable on this build. Run the app on a supported Android device.',
+} as const
+
+export type Unsubscribe = () => void
+
+export interface ReconnectOptions {
+  allowPromptFallback?: boolean
+  suppressFailureError?: boolean
+}
+
+export interface GlowColor {
+  r: number
+  g: number
+  b: number
+}
+
+type AppStore = Pick<typeof useAppStore, 'getState' | 'setState'>
+type RollResultCallback = (pixelId: string, face: number, dieType: DieType) => void
+type BleCapabilityProbe = {
+  bluetooth?: unknown
+}
+
+function mapPixelDieType(dieType: string): DieType | null {
+  switch (dieType) {
+    case 'd4':
+    case 'd6':
+    case 'd8':
+    case 'd10':
+    case 'd12':
+    case 'd20':
+      return dieType
+    case 'd00':
+      return 'd100'
+    case 'd6pipped':
+      return 'd6'
+    default:
+      return null
+  }
+}
+
+function getPixelId(pixel: Pixel): string {
+  return pixel.systemId
+}
+
+function toBlinkColor(color?: GlowColor): Color {
+  if (!color) {
+    return Color.white
+  }
+
+  return Color.fromBytes(color.r, color.g, color.b)
+}
+
+export function getBleUnavailableMessage(probe: BleCapabilityProbe = navigator as BleCapabilityProbe): string | null {
+  return hasBleSupport(probe) ? null : BLE_UNAVAILABLE_MESSAGES.unavailable
+}
+
+export function hasBleSupport(probe: BleCapabilityProbe = navigator as BleCapabilityProbe): boolean {
+  return 'bluetooth' in probe && probe.bluetooth !== undefined
+}
+
+function isPermissionDeniedError(error: unknown): boolean {
+  if (error instanceof DOMException) {
+    return error.name === 'NotAllowedError' || error.name === 'NotFoundError'
+  }
+
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase()
+    return message.includes('permission') || message.includes('requestdevice') || message.includes('chooser')
+  }
+
+  return false
+}
+
+function toErrorMessage(error: unknown): string {
+  if (isPermissionDeniedError(error)) {
+    return PERMISSION_DENIED_MESSAGE
+  }
+
+  if (error instanceof Error && error.message) {
+    return error.message
+  }
+
+  return 'Bluetooth connection failed. Tap \'Connect\' to try again.'
+}
+
+export class PixelsService {
+  private readonly store: AppStore
+  private readonly pixels = new Map<string, Pixel>()
+  private readonly cleanups = new Map<string, Unsubscribe[]>()
+  private readonly rollCallbacks = new Set<RollResultCallback>()
+  private readonly lastRollAt = new Map<string, number>()
+
+  constructor(store: AppStore = useAppStore) {
+    this.store = store
+  }
+
+  initializeBleSupport(probe: BleCapabilityProbe = navigator as BleCapabilityProbe): void {
+    this.store.setState({ bleAvailable: hasBleSupport(probe) })
+  }
+
+  async connectDie(): Promise<void> {
+    this.store.getState().clearBleError()
+
+    if (!hasBleSupport()) {
+      this.store.setState({ bleAvailable: false })
+      return
+    }
+
+    try {
+      const pixel = await requestPixel()
+      await this.connectRegisteredPixel(pixel)
+    } catch (error) {
+      this.store.getState().setBleError(toErrorMessage(error))
+    }
+  }
+
+  async reconnectPairedDice(options: ReconnectOptions = {}): Promise<void> {
+    this.store.getState().clearBleError()
+
+    if (!hasBleSupport()) {
+      this.store.setState({ bleAvailable: false })
+      return
+    }
+
+    const pairedPixelIds = this.store.getState().pairedPixelIds
+    if (pairedPixelIds.length === 0) {
+      this.store.getState().setBleError(NO_PAIRED_DICE_MESSAGE)
+      return
+    }
+
+    const { allowPromptFallback = false, suppressFailureError = false } = options
+    const capabilities = getBluetoothCapabilities()
+
+    let reconnectedCount = 0
+
+    for (const pixelId of pairedPixelIds) {
+      try {
+        const pixel = await getPixel(pixelId)
+        if (!pixel) {
+          continue
+        }
+
+        const connected = await this.connectRegisteredPixel(pixel)
+        if (connected) {
+          reconnectedCount += 1
+        }
+      } catch {
+        // Continue trying the remaining paired dice.
+      }
+    }
+
+    if (reconnectedCount === 0) {
+      if (allowPromptFallback && !capabilities.persistentPermissions) {
+        try {
+          const pixel = await requestPixel()
+          await this.connectRegisteredPixel(pixel)
+          return
+        } catch (error) {
+          if (!suppressFailureError) {
+            this.store.getState().setBleError(toErrorMessage(error))
+          }
+          return
+        }
+      }
+
+      if (!suppressFailureError) {
+        this.store.getState().setBleError(
+          capabilities.persistentPermissions
+            ? NO_RECONNECTABLE_DICE_MESSAGE
+            : SILENT_RECONNECT_UNAVAILABLE_MESSAGE,
+        )
+      }
+    }
+  }
+
+  async disconnectDie(pixelId: string): Promise<void> {
+    const pixel = this.pixels.get(pixelId)
+
+    try {
+      await pixel?.disconnect()
+    } catch {
+      // Disconnect should leave the local service state clean even if the SDK throws.
+    } finally {
+      this.cleanupPixel(pixelId)
+      this.store.getState().updatePixelState(pixelId, { connectionState: 'disconnected' })
+    }
+  }
+
+  onRollResult(callback: RollResultCallback): Unsubscribe {
+    this.rollCallbacks.add(callback)
+
+    return () => {
+      this.rollCallbacks.delete(callback)
+    }
+  }
+
+  async glowDie(pixelId: string, color?: GlowColor): Promise<void> {
+    const pixel = this.pixels.get(pixelId)
+    if (!pixel) {
+      return
+    }
+
+    await pixel.blink(toBlinkColor(color))
+  }
+
+  async stopGlow(pixelId: string): Promise<void> {
+    const pixel = this.pixels.get(pixelId)
+    if (!pixel) {
+      return
+    }
+
+    await pixel.stopAllAnimations()
+  }
+
+  async stopAllGlows(): Promise<void> {
+    await Promise.allSettled(
+      Array.from(this.pixels.keys(), (pixelId) => this.stopGlow(pixelId)),
+    )
+  }
+
+  private async connectRegisteredPixel(pixel: Pixel): Promise<boolean> {
+    await repeatConnect(pixel)
+
+    const dieType = mapPixelDieType(pixel.dieType)
+    if (!dieType) {
+      await pixel.disconnect().catch(() => undefined)
+      this.store.getState().setBleError(`Unsupported die type: ${pixel.dieType}`)
+      return false
+    }
+
+    const pixelId = getPixelId(pixel)
+    this.cleanupPixel(pixelId)
+    this.pixels.set(pixelId, pixel)
+    this.registerPixel(pixelId, pixel, dieType)
+    this.store.getState().rememberPairedPixelId(pixelId)
+
+    this.store.getState().addPixel({
+      pixelId,
+      dieType,
+      connectionState: 'connected',
+      batteryLevel: Number.isFinite(pixel.batteryLevel) ? pixel.batteryLevel : null,
+      lastFace: null,
+    })
+
+    return true
+  }
+
+  private registerPixel(pixelId: string, pixel: Pixel, dieType: DieType): void {
+    const onRoll = (rawFace: number) => {
+      const lastRollAt = this.lastRollAt.get(pixelId) ?? 0
+      const now = Date.now()
+      if (now - lastRollAt < ROLL_DEDUP_MS) {
+        return
+      }
+
+      this.lastRollAt.set(pixelId, now)
+
+      const face = normalizeRollFace(dieType, rawFace)
+      this.store.getState().updatePixelState(pixelId, { lastFace: face })
+
+      for (const callback of this.rollCallbacks) {
+        callback(pixelId, face, dieType)
+      }
+    }
+
+    const onBattery = (event: { level: number }) => {
+      this.store.getState().updatePixelState(pixelId, { batteryLevel: event.level })
+    }
+
+    const onStatusChanged = (event: PixelStatusEvent) => {
+      const connectionState = event.status === 'disconnected' ? 'disconnected' : 'connected'
+      this.store.getState().updatePixelState(pixelId, { connectionState })
+
+      if (event.status === 'disconnected') {
+        this.cleanupPixel(pixelId)
+      }
+    }
+
+    pixel.addEventListener('roll', onRoll)
+    pixel.addEventListener('battery', onBattery)
+    pixel.addEventListener('statusChanged', onStatusChanged)
+
+    this.cleanups.set(pixelId, [
+      () => pixel.removeEventListener('roll', onRoll),
+      () => pixel.removeEventListener('battery', onBattery),
+      () => pixel.removeEventListener('statusChanged', onStatusChanged),
+    ])
+  }
+
+  private cleanupPixel(pixelId: string): void {
+    const cleanups = this.cleanups.get(pixelId)
+    if (cleanups) {
+      for (const cleanup of cleanups) {
+        cleanup()
+      }
+    }
+
+    this.cleanups.delete(pixelId)
+    this.pixels.delete(pixelId)
+    this.lastRollAt.delete(pixelId)
+  }
+}
+
+function normalizeRollFace(dieType: DieType, face: number): number {
+  if (dieType !== 'd100') {
+    return face
+  }
+
+  // VERIFY: d100 face range assumed 0-99 from SDK and normalized to 1-100 here.
+  if (face >= 0 && face <= 99) {
+    return face + 1
+  }
+
+  return face
+}
+
+export const pixelsService = new PixelsService()
+
+export function initializeBleSupport(): void {
+  pixelsService.initializeBleSupport()
+}
+
+export async function connectDie(): Promise<void> {
+  await pixelsService.connectDie()
+}
+
+export async function reconnectPairedDice(options?: ReconnectOptions): Promise<void> {
+  await pixelsService.reconnectPairedDice(options)
+}
+
+export async function disconnectDie(pixelId: string): Promise<void> {
+  await pixelsService.disconnectDie(pixelId)
+}
+
+export function onRollResult(callback: RollResultCallback): Unsubscribe {
+  return pixelsService.onRollResult(callback)
+}
+
+export async function glowDie(pixelId: string, color?: GlowColor): Promise<void> {
+  await pixelsService.glowDie(pixelId, color)
+}
+
+export async function stopGlow(pixelId: string): Promise<void> {
+  await pixelsService.stopGlow(pixelId)
+}
+
+export async function stopAllGlows(): Promise<void> {
+  await pixelsService.stopAllGlows()
+}

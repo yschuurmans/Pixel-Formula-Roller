@@ -1,31 +1,36 @@
-# STORY-003: Bluetooth / Pixels Service
+# STORY-003: Android BLE / Pixels Service
 
 ## Goal
-A service layer managing connecting to Pixels dice, receiving roll events, and sending glow commands — the rest of the app never touches the SDK directly.
+A service layer managing connecting to Pixels dice, auto-reconnecting remembered dice, receiving roll events, and sending glow commands through a native Android BLE bridge. The React app must never touch raw platform Bluetooth APIs directly.
 
 ## Prerequisites
-- STORY-000 Spike D must be complete (Windows reconnect delay workaround confirmed).
+- STORY-000 device validation findings available for die type mapping and settled roll behavior.
 
 ## Canonical Die Type
-Map `pixel.dieType === "d00"` → `"d100"` here at the BLE boundary. All values emitted from this service use `DieType` from `src/types/formula.ts`.
+Map any Android/native Pixels `d00` value to `"d100"` here at the BLE boundary. All values emitted from this service use `DieType` from `src/types/formula.ts`.
 
 ## Acceptance Criteria
 
-### BLE Capability Detection (runs on app load)
-- [ ] On app initialisation, check `"bluetooth" in navigator && navigator.bluetooth !== undefined`
-- [ ] If unavailable, set `bleAvailable: false` in Zustand store — the UI layer uses this to show a persistent banner (see STORY-004)
-- [ ] Platform-specific messages (stored as constants in this service):
-  - iOS Safari: `"Open this app in the Bluefy browser to use Bluetooth dice"`
-  - Firefox / unsupported: `"Bluetooth dice require Chrome or Edge"`
-  - Linux Chrome: `"Enable chrome://flags/#enable-web-bluetooth then restart Chrome"`
+### Android BLE Availability And Permissions
+- [ ] On app initialisation, query the native layer for BLE availability and runtime permission state
+- [ ] If unavailable, set `bleAvailable: false` in Zustand store
+- [ ] If Android Bluetooth permissions are missing, set a `bleError` string in store with actionable guidance
+- [ ] The service exposes a way for the UI to trigger the native permission request flow
 
 ### Connection
-- [ ] `connectDie(): Promise<void>` — calls `requestPixel()`, connects, registers in store; catches permission denial (user cancels picker or denies) and sets a `bleError` string in store without throwing
+- [ ] `connectDie(): Promise<void>` — opens the native Android add-die flow, connects, registers in store, and remembers the die for future auto-connect
+- [ ] `reconnectPairedDice(options?): Promise<void>` — attempts to reconnect all remembered dice currently detectable by Android BLE
 - [ ] `disconnectDie(pixelId: string): Promise<void>`
 - [ ] On permission denial: store `bleError = "Bluetooth permission denied. Tap 'Connect' to try again."` — the UI layer surfaces this as a toast
 
+### Automatic Reconnect
+- [ ] On app launch and app resume, the service automatically scans for remembered dice
+- [ ] Any remembered dice that are currently detectable are connected without user interaction
+- [ ] If none are found, the app remains usable and surfaces disconnected state without crashing
+- [ ] The reconnect scan window is bounded so startup does not hang indefinitely
+
 ### Roll Events
-- [ ] Subscribe to the SDK's settled roll event (face is stable, not the intermediate rolling state) — determined by Spike A/D; use `onRoll` or equivalent "rolled" final state event only
+- [ ] Subscribe to the native layer's settled roll event (face is stable, not the intermediate rolling state)
 - [ ] **Deduplication**: ignore any roll event that arrives within 300ms of a previous roll event from the same die (debounce per-die)
 - [ ] `onRollResult(callback: (pixelId: string, face: number, dieType: DieType) => void): Unsubscribe` — exposed to the roll engine (STORY-006a)
 
@@ -35,8 +40,8 @@ Map `pixel.dieType === "d00"` → `"d100"` here at the BLE boundary. All values 
 - [ ] `stopAllGlows(): Promise<void>` — called on navigation away mid-roll (STORY-006a cleanup)
 
 ### Battery
-- [ ] Subscribe to battery level events from the SDK; update `batteryLevel` in `PixelEntry` when received
-- [ ] If SDK does not push battery events continuously, request battery level once on connect and store the result; document in Findings of STORY-000
+- [ ] Subscribe to battery level events from the native layer; update `batteryLevel` in `PixelEntry` when received
+- [ ] If battery is not pushed continuously, request it once on connect and store the result
 
 ### Zustand `pixels` slice
 - [ ] Use `Record<string, PixelEntry>` (plain object keyed by pixelId) — NOT a `Map` (Maps do not serialise to JSON)
@@ -51,20 +56,21 @@ Map `pixel.dieType === "d00"` → `"d100"` here at the BLE boundary. All values 
   }
   ```
 - [ ] The `pixels` slice is **excluded from `persist` middleware** using Zustand's `partialize` option — live SDK objects are not serialisable and the connected state is transient
-- [ ] Additional store fields: `bleAvailable: boolean`, `bleError: string | null`
-- [ ] Actions: `addPixel`, `updatePixelState`, `removePixel`, `setBleError`, `clearBleError`
+- [ ] Additional store fields: `bleAvailable: boolean`, `bleError: string | null`, `pairedPixelIds: string[]`
+- [ ] Actions: `addPixel`, `updatePixelState`, `removePixel`, `rememberPairedPixelId`, `setBleError`, `clearBleError`
 
-### Windows reconnect delay
-- [ ] Use `repeatConnect()` exported from `@systemic-games/pixels-web-connect` — confirmed to exist (STORY-000 Spike D)
-- [ ] Use `repeatConnect()` on all platforms (it is safe everywhere, just has slightly slower connect on non-Windows; avoids platform detection complexity)
+### Native bridge boundary
+- [ ] The React app talks to a platform service interface, not directly to Android APIs
+- [ ] The actual Android BLE implementation lives behind a Capacitor bridge so the UI can stay framework-level and testable
 
 ### Manual Test Checklist
 - [ ] Connect one d6 → appears in Settings screen list with battery %
+- [ ] Close and reopen the app with the same die nearby → it auto-reconnects without opening a picker
+- [ ] Power on two remembered dice near the phone → both reconnect automatically on app launch
 - [ ] Roll die → event fires once per physical roll (deduplication verified by rolling quickly)
 - [ ] `glowDie()` → die visibly pulses
 - [ ] `stopGlow()` → animation stops
 - [ ] Deny permission on connect → toast shown, app does not crash
-- [ ] Open in Firefox → unsupported banner shown
 - [ ] Disconnect die via Settings → state updates in UI
 
 ## Notes

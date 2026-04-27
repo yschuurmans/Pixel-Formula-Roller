@@ -2,8 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(npm test *)",
-      "Bash(docker compose config *)",
-      "Bash(docker-compose config *)"
+      "Bash(adb devices *)",
+      "Bash(npx cap run android *)"
     ]
   }
 }

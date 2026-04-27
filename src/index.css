@@ -1,5 +1,18 @@
 @import "tailwindcss";
 
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
 body {
+  margin: 0;
   font-family: 'Press Start 2P', monospace;
+  background: #120f16;
+  color: #f7ead4;
 }

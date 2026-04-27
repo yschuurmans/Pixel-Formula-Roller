@@ -82,3 +82,8 @@ This mapping is enforced here and in STORY-003. No other code should reference `
 - **d100 face range**: assume SDK reports 0–99; add 1 to get 1–100. Mark with a `// VERIFY: d100 face range assumed 0-99` comment for hardware verification.
 - **Formula text field**: always display `parsed.canonical` after blur — do not preserve user's original notation.
 - Depends on STORY-000 (done), STORY-001.
+
+## Tester Findings
+- Verified against [src/services/formulaParser.ts](d:/Git/Pixel-Formula-Roller/src/services/formulaParser.ts) and [src/services/__tests__/formulaParser.test.ts](d:/Git/Pixel-Formula-Roller/src/services/__tests__/formulaParser.test.ts).
+- Added a regression test to reject subtraction of a dice group (`1d6-1d4`), because STORY-002 supports flat numeric modifiers but not signed dice groups. The parser now returns `null` instead of evaluating that formula incorrectly.
+- Validation on 2026-04-27: `npm test` passed with 36/36 tests; `npm run build` passed.

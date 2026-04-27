@@ -1,13 +1,19 @@
 # Pixel Formula Roller — App Specification
 
-> Last updated: 2026-04-26
-> Status: Spec complete, implementation not started
+> Last updated: 2026-04-27
+> Status: Spec updated for Android-only pivot; current implementation still reflects a web prototype in places
 
 ---
 
 ## 1. Product Overview
 
-A mobile-first progressive web app (PWA) that connects to [Pixels electronic dice](https://gamewithpixels.com/) over Web Bluetooth. Users build dice formulas visually or via text input, then roll those formulas. The app signals the correct physical dice to light up, collects their results, and displays a roll history.
+An Android-only mobile app that connects to [Pixels electronic dice](https://gamewithpixels.com/) over native Android Bluetooth Low Energy. Users build dice formulas visually or via text input, then roll those formulas. The app signals the correct physical dice to light up, collects their results, and displays a roll history.
+
+The target product should behave like a dedicated Android Pixels companion app:
+
+- On app launch and app resume, it automatically scans for previously known Pixels dice
+- Any known dice that are currently detectable are automatically reconnected without requiring the user to pick them again
+- The user only needs a manual pairing flow when adding a brand-new die or when OS permissions were revoked
 
 ---
 
@@ -19,13 +25,21 @@ A mobile-first progressive web app (PWA) that connects to [Pixels electronic dic
 - **State**: Zustand (lightweight, no boilerplate)
 - **Routing**: React Router v6
 
+### Android Shell
+- **App shell**: Capacitor Android app wrapping the React UI
+- **IDE / build system**: Android Studio + Gradle
+- **Runtime target**: Foreground Android app, APK/AAB distribution
+
 ### Bluetooth
-- **Library**: `@systemic-games/pixels-web-connect` (official Pixels JS SDK)
-- **Protocol**: Web Bluetooth API (Chromium-based browsers only; Chrome, Edge, Opera)
-- **iOS caveat**: Requires Bluefy browser on iOS
+- **Protocol**: Native Android BLE
+- **Integration shape**: A native Android BLE layer exposed to the React app through a thin Capacitor bridge
+- **Implementation language**: Kotlin on the Android side for BLE scanning, connection, notifications, and reconnect
+- **Behavior target**: Automatically reconnect all detectable remembered dice on app launch / resume
 
 ### Persistence
-- **Local Storage** for saved formulas and settings (no backend needed for MVP)
+- **App data**: Capacitor Preferences-backed persistence for formulas and settings
+- **Known dice cache**: Persist remembered Pixels identities and auto-connect metadata locally on-device
+- No backend required for MVP
 
 ### Formula Parsing
 - **Library**: `rpg-dice-roller` (npm) — supports NdX, kh, kl, modifiers
@@ -33,41 +47,78 @@ A mobile-first progressive web app (PWA) that connects to [Pixels electronic dic
 
 ---
 
-## 3. Browser / Device Support
+## 3. Platform Support
 
-| Platform | Browser | Bluetooth |
-|----------|---------|-----------|
-| Android  | Chrome / Edge | Native |
-| Windows  | Chrome / Edge | Native (4s reconnect delay workaround needed) |
-| macOS    | Chrome / Edge | Native |
-| iOS      | Bluefy | Via Bluefy |
-| Linux    | Chrome (flag: `#enable-web-bluetooth`) | Native |
+### Supported runtime
+
+| Platform | Status | Notes |
+|----------|--------|-------|
+| Android phone | Primary target | Full BLE support, APK install, auto-connect workflow |
+| Android tablet | Supported | Same feature set as phone |
+
+### Runtime scope
+
+Only Android phone and tablet runtime support is in scope for MVP.
+
+### Development hosts
+
+| Host OS | Status |
+|---------|--------|
+| Windows | Supported via Android Studio + ADB |
+| macOS | Supported via Android Studio + ADB |
+| Linux | Supported via Android Studio + ADB |
 
 ---
 
-## 4. Pixels BLE Integration
+## 4. Android Pixels BLE Integration
 
-### Library Usage
+### Architecture
+
+The React app calls a platform service that is implemented natively on Android.
+
+Suggested TypeScript-facing contract:
+
 ```ts
-import { requestPixel, Pixel } from "@systemic-games/pixels-web-connect";
+interface PixelsPlatformService {
+  initialize(): Promise<void>;
+  connectNewDie(): Promise<void>;
+  reconnectKnownDice(options?: { promptIfNeeded?: boolean }): Promise<void>;
+  disconnectDie(pixelId: string): Promise<void>;
+  onRollResult(callback: (pixelId: string, face: number, dieType: DieType) => void): () => void;
+  glowDie(pixelId: string, color?: { r: number; g: number; b: number }): Promise<void>;
+  stopGlow(pixelId: string): Promise<void>;
+  stopAllGlows(): Promise<void>;
+}
 ```
 
 ### Connection Flow
-1. User taps "Connect Die" → `requestPixel()` opens browser BLE picker
-2. After selection → `pixel.connect()` establishes connection
-3. Subscribe to `onRollState` / `onRoll` events for live roll data
-4. App tracks each connected die by `pixel.pixelId` and `pixel.dieType`
+1. App launches or resumes in foreground
+2. Native layer loads remembered Pixels identities from local storage
+3. Native BLE scan starts automatically for a short reconnect window
+4. Any remembered dice detected during that window are connected automatically
+5. New dice are added through a manual "Connect new die" flow
+6. Once connected, the die is added to the known-dice list for future auto-connect
+7. Roll, battery, and status events are forwarded from Android to the React app
+
+### Remembered Identity
+
+The app should remember enough metadata to reconnect a die reliably on Android:
+
+- Stable Pixels identity (`pixelId` once learned)
+- Die type
+- Last known Android BLE device identifier if available
+- Last seen timestamp
+- Whether the die is eligible for auto-connect
 
 ### Lighting a Die
-```ts
-// Make a die flash a color to prompt the user to roll it
-await pixel.sendMessage("playLightUpFace", { ... });
-// Or use the blink/animate helpers from the SDK
-```
-Exact API calls depend on SDK version — consult `@systemic-games/pixels-web-connect` docs. The app should call the appropriate animation command to make a die glow when it is the next one to be rolled.
+
+The Android BLE layer should expose a high-level glow API to the React app. The React layer should never construct raw BLE payloads directly.
 
 ### Die Types
-The SDK exposes `pixel.dieType` as one of: `d4`, `d6`, `d8`, `d10`, `d12`, `d20`, `d00` (percentile / d100).
+
+Canonical app tokens remain: `d4`, `d6`, `d8`, `d10`, `d12`, `d20`, `d100`.
+
+If Pixels reports `d00`, map it to `d100` at the BLE boundary.
 
 ---
 
@@ -116,8 +167,8 @@ The formula string is the single source of truth. The visual dice picker is deri
 ```
 
 **Behaviour:**
-- Tapping a saved formula card → opens Formula Screen with formula pre-loaded and dice glowing
-- Long-press (or swipe / kebab menu) → Edit / Delete options
+- Tapping a saved formula card → opens Formula Screen with formula pre-loaded
+- Kebab menu on a card → Edit / Delete options
 - Roll history shows: formula label/string, total result, timestamp
 - History count is configurable in Settings (default 5)
 - [+ New] → opens blank Formula Screen
@@ -173,16 +224,16 @@ The formula string is the single source of truth. The visual dice picker is deri
 
 **Roll button:**
 - Determine which physical Pixels dice are needed (by die type and count)
-- For each required die, call the SDK glow/animate command to light it up
+- For each required die, call the BLE glow API to light it up
 - Listen for roll events on the subscribed dice
 - As results come in, tick off the required rolls
-- When all required dice have reported, evaluate the formula with actual values and display the Result Panel (see 6.3)
-- If a needed die is not connected → show prompt "Please connect a dX die"
+- When all required dice have reported, evaluate the formula with actual values and display the Result Panel
+- If a needed die is not connected, show inline guidance and offer manual entry fallback only if that story is in scope
 
 **Save button:**
 - Validate: formula must be non-empty and parseable
-- Prompt for a name if none entered
-- Persist to local storage
+- Name must be non-empty; if blank, show inline validation error
+- Persist locally on-device
 - Navigate back to Main Screen
 
 **Delete button (only shown when editing existing formula):**
@@ -222,23 +273,27 @@ Appears after a roll completes:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | History length | 5 | Max entries in roll history |
-| Connected dice | — | List of currently connected Pixels dice, with Connect/Disconnect per die |
+| Known dice | — | List of connected / remembered Pixels dice |
+| Auto-connect | On | Remembered dice are auto-connected on launch and resume |
 | Theme | Pixel (dark) | Visual theme selector |
 
 ---
 
 ## 7. Bluetooth State Management
 
-- App maintains a **Pixel registry**: `Map<pixelId, Pixel>` held in Zustand store
-- Each entry tracks: `dieType`, `connectionState`, `batteryLevel`, `lastRollFace`
-- On connect: subscribe to roll events, store in registry
-- On disconnect: update state, do not remove from registry (allow reconnect)
-- Roll collection flow:
-  1. Formula is parsed → extract required die types and counts
-  2. Required dice are matched against connected registry entries
-  3. Missing dice → surface warning but allow manual entry fallback (type the result)
-  4. On roll event received → match to pending slot in formula evaluation queue
-  5. When all slots filled → evaluate formula → show Result Panel
+- App maintains a **Pixel registry** in Zustand keyed by `pixelId`
+- Each live entry tracks: `dieType`, `connectionState`, `batteryLevel`, `lastRollFace`
+- App also maintains a **remembered dice registry** for auto-connect
+- On connect: subscribe to roll and battery events, register die in live state, and mark it remembered for future reconnect
+- On disconnect: update live state but keep the die in remembered state unless explicitly forgotten by the user
+- On app launch / resume: native layer scans for remembered dice and reconnects every detectable match automatically
+
+Roll collection flow:
+1. Formula is parsed → extract required die types and counts
+2. Required dice are matched against connected registry entries
+3. Missing dice → surface warning and optionally allow manual entry fallback when that story is implemented
+4. On roll event received → match to pending slot in formula evaluation queue
+5. When all slots filled → evaluate formula → show Result Panel
 
 ---
 
@@ -274,11 +329,22 @@ interface DieRollResult {
 }
 ```
 
+### RememberedPixel
+```ts
+interface RememberedPixel {
+  pixelId: string;
+  dieType: DieType;
+  lastKnownDeviceId: string | null;
+  autoConnect: boolean;
+  lastSeenAt: number | null;
+}
+```
+
 ### AppSettings
 ```ts
 interface AppSettings {
-  historyLength: number;  // default 5
-  theme: "pixel-dark" | "pixel-light";
+  historyLength: number;
+  theme: "pixel-dark";
 }
 ```
 
@@ -289,53 +355,122 @@ interface AppSettings {
 **In scope:**
 - Main screen with saved formulas + roll history
 - Formula screen with visual picker + text input + keep modifiers
-- Bluetooth connect/disconnect per die
+- Android-native BLE connect / disconnect per die
+- Automatic reconnect to all detectable remembered dice on app launch / resume
 - Dice glow on roll prompt
 - Result panel with per-die breakdown
 - Save / edit / delete formulas
 - Configurable history length
-- Docker Compose deployment (nginx serving production build)
+- APK debug builds and direct install / launch to a connected Android device
 
 **Out of scope (post-MVP):**
+- iOS app
 - Cloud sync / accounts
 - Shared formula libraries
 - Custom animations per formula
 - Roll statistics / analytics
-- Offline PWA install prompt (nice-to-have, defer)
 
 ---
 
-## 11. Deployment
+## 10. Android Development And Device Run Workflow
 
-### Development
+This project should support a direct developer workflow where the phone is connected once and every build installs and launches automatically. No manual APK transfer or manual sideloading should be part of the normal loop.
+
+### 10.1 Tooling prerequisites
+
+Install:
+
+- Node.js and npm
+- Android Studio
+- Android SDK Platform Tools (`adb`)
+- Android SDK platform + build tools for the target API level
+- A USB data cable for first-time pairing
+
+### 10.2 Phone setup
+
+On the Android phone:
+
+1. Open **Settings → About phone**
+2. Tap **Build number** seven times to enable Developer Options
+3. Open **Developer options**
+4. Enable **USB debugging**
+5. Optionally enable **Wireless debugging** for cable-free iteration later
+
+### 10.3 First-time workspace bootstrap
+
 ```bash
-npm install && npm run dev    # Vite dev server at http://localhost:5173
+npm install
+npm run build
+npx cap sync android
+npx cap open android
 ```
 
-### Production (Docker)
+Notes:
+
+- `npx cap sync android` updates the native Android project from the web assets and Capacitor config
+- `npx cap open android` opens the native project in Android Studio
+
+### 10.4 Direct install and run on a connected phone
+
+Connect the phone by USB, accept the device trust prompt on the phone, then run:
+
+```bash
+adb devices
+npx cap run android --target <device-id>
 ```
-Dockerfile (multi-stage):
-  Stage 1 — builder: node:lts-alpine → npm ci → npm run build → dist/
-  Stage 2 — runner:  nginx:alpine    → copy dist/ → serve on :80
 
-docker-compose.yml:
-  service: app
-  build: .
-  ports: "${APP_PORT:-80}:80"
+Expected workflow:
+
+- Gradle builds the app
+- The app is installed directly to the connected phone
+- The app launches automatically
+- Re-running the same command updates the installed app in place
+
+This is the default dev loop. Do not require developers to build an APK, copy it to the phone, and install it manually.
+
+### 10.5 Android Studio run workflow
+
+If Android Studio is open:
+
+1. Connect the phone
+2. Confirm it appears in the device dropdown
+3. Press **Run**
+
+Android Studio should build, install, and launch directly to the device with no manual APK handling.
+
+### 10.6 Optional live-reload workflow
+
+For faster UI iteration, support a live-reload loop:
+
+```bash
+npm run dev -- --host 0.0.0.0
+npx cap run android --target <device-id> -l --external
 ```
 
-Custom `nginx.conf` must include:
-- SPA fallback: `try_files $uri $uri/ /index.html` (required for React Router)
-- Gzip compression
-- Long-lived cache headers for hashed static assets; `no-cache` for `index.html`
+Requirements:
 
-> **HTTPS requirement**: Web Bluetooth only works on secure origins. In production outside of localhost, put a TLS-terminating proxy (Caddy or nginx + Certbot) in front of the Docker container.
+- Phone and dev machine must be on the same network
+- Native BLE functionality must still be available in the Android shell
+
+### 10.7 Optional wireless debugging workflow
+
+Once USB debugging works, developers may switch to wireless ADB:
+
+```bash
+adb pair <phone-ip>:<pair-port>
+adb connect <phone-ip>:<debug-port>
+adb devices
+npx cap run android --target <device-id>
+```
+
+This still builds, installs, and launches directly to the phone. No APK transfer step is introduced.
 
 ---
 
-## 10. Open Questions
+## 11. Open Questions
 
-1. Does `@systemic-games/pixels-web-connect` expose a simple "blink this die" call, or do we need to send raw animation payloads? (Check SDK source before STORY-004.)
-2. How does the app handle a formula that needs 3× d6 but the user only has 1 connected d6? — Proposed: roll the same die 3 times sequentially, lighting it each time.
-3. What happens when a die disconnects mid-roll? — Proposed: surface error, allow manual result entry.
-4. d% (d100) — does the Pixels SDK report 1–100 or 0–99? Confirm against SDK docs.
+1. Which Android BLE abstraction should back the Capacitor bridge: a custom plugin only, or a stable third-party BLE plugin plus Pixels-specific native code?
+2. What is the reconnect scan window on launch / resume before the UI gives up and shows the die as offline?
+3. How should the app behave when Android Bluetooth permissions are denied permanently from system settings?
+4. d% (d100): does the Pixels device report 1–100 or 0–99 on Android? Confirm against real hardware.
+5. Should the app support an explicit "Forget die" action in Settings, or keep all known dice forever until app data is cleared?
