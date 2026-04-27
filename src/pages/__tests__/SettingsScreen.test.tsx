@@ -7,23 +7,31 @@ import { useAppStore } from '../../stores/useAppStore'
 const {
   connectDieMock,
   disconnectDieMock,
+  forgetDieMock,
   getBleUnavailableMessageMock,
+  glowDieMock,
   reconnectPairedDiceMock,
   unsubscribeMock,
 } = vi.hoisted(() => ({
   connectDieMock: vi.fn(),
   disconnectDieMock: vi.fn(),
+  forgetDieMock: vi.fn(),
   getBleUnavailableMessageMock: vi.fn(() => 'Bluetooth is unavailable in this Android build because the native Pixels BLE bridge is not implemented yet.'),
+  glowDieMock: vi.fn(),
   reconnectPairedDiceMock: vi.fn(),
   unsubscribeMock: vi.fn(),
 }))
 
-let rollCallback: ((pixelId: string, face: number, dieType: 'd4' | 'd6' | 'd8' | 'd10' | 'd12' | 'd20' | 'd100') => void) | undefined
+let rollCallback:
+  | ((pixelId: string, face: number, dieType: 'd4' | 'd6' | 'd8' | 'd10' | 'd12' | 'd20' | 'd100') => void)
+  | undefined
 
 vi.mock('../../services/pixelsService', () => ({
   connectDie: connectDieMock,
   disconnectDie: disconnectDieMock,
+  forgetDie: forgetDieMock,
   getBleUnavailableMessage: getBleUnavailableMessageMock,
+  glowDie: glowDieMock,
   reconnectPairedDice: reconnectPairedDiceMock,
   onRollResult: vi.fn((callback: typeof rollCallback) => {
     rollCallback = callback
@@ -41,7 +49,15 @@ function renderSettingsScreen() {
     <MemoryRouter initialEntries={['/', '/settings']} initialIndex={1}>
       <Routes>
         <Route path="/" element={<LocationDisplay />} />
-        <Route path="/settings" element={<><SettingsScreen /><LocationDisplay /></>} />
+        <Route
+          path="/settings"
+          element={
+            <>
+              <SettingsScreen />
+              <LocationDisplay />
+            </>
+          }
+        />
       </Routes>
     </MemoryRouter>,
   )
@@ -52,7 +68,7 @@ function resetStore() {
   useAppStore.setState({
     savedFormulas: [],
     rollHistory: [],
-    settings: { historyLength: 5, theme: 'dark' },
+    settings: { theme: 'dark' },
     pairedPixelIds: [],
     bleAvailable: true,
     bleError: null,
@@ -65,6 +81,8 @@ describe('SettingsScreen', () => {
     resetStore()
     connectDieMock.mockReset()
     disconnectDieMock.mockReset()
+    forgetDieMock.mockReset()
+    glowDieMock.mockReset()
     getBleUnavailableMessageMock.mockClear()
     reconnectPairedDiceMock.mockReset()
     unsubscribeMock.mockReset()
@@ -72,7 +90,7 @@ describe('SettingsScreen', () => {
     vi.useRealTimers()
   })
 
-  it('navigates back using navigation history', () => {
+  it('navigates back to the main screen', () => {
     renderSettingsScreen()
 
     fireEvent.click(screen.getByRole('button', { name: '← Back' }))
@@ -103,6 +121,17 @@ describe('SettingsScreen', () => {
     expect(screen.getByText('Bluetooth is unavailable in this Android build because the native Pixels BLE bridge is not implemented yet.')).toBeInTheDocument()
   })
 
+  it('keeps connect enabled when only a BLE permission error is present', () => {
+    useAppStore.setState({
+      bleAvailable: true,
+      bleError: "Bluetooth permission denied. Tap 'Connect' to try again.",
+    })
+
+    renderSettingsScreen()
+
+    expect(screen.getByRole('button', { name: 'Connect new die' })).toBeEnabled()
+  })
+
   it('reconnects previously paired dice without opening the picker', async () => {
     reconnectPairedDiceMock.mockResolvedValue(undefined)
     useAppStore.setState({ pairedPixelIds: ['pixel-1234'] })
@@ -115,7 +144,7 @@ describe('SettingsScreen', () => {
     expect(reconnectPairedDiceMock).toHaveBeenCalledWith({ allowPromptFallback: true })
   })
 
-  it('renders dice rows and disconnects connected dice', () => {
+  it('renders dice rows, flashes from the die icon, disconnects connected dice, and can forget remembered dice', async () => {
     useAppStore.setState({
       pixels: {
         'pixel-1234': {
@@ -133,19 +162,49 @@ describe('SettingsScreen', () => {
     expect(screen.getByText('Pixel …1234')).toBeInTheDocument()
     expect(screen.getByText('Battery: 82%')).toBeInTheDocument()
     expect(screen.getByText('Last face: 17')).toBeInTheDocument()
+    expect(screen.getByLabelText('Connected')).toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Flash Pixel 1234' }))
+    })
+    expect(glowDieMock).toHaveBeenCalledWith('pixel-1234')
 
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }))
     expect(disconnectDieMock).toHaveBeenCalledWith('pixel-1234')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Forget' }))
+    expect(forgetDieMock).toHaveBeenCalledWith('pixel-1234')
   })
 
-  it('updates the history length setting immediately', () => {
-    renderSettingsScreen()
-
-    fireEvent.change(screen.getByLabelText('Saved roll history count'), {
-      target: { value: '12' },
+  it('flashes all connected dice', async () => {
+    useAppStore.setState({
+      pixels: {
+        'pixel-1234': {
+          pixelId: 'pixel-1234',
+          dieType: 'd20',
+          connectionState: 'connected',
+          batteryLevel: 82,
+          lastFace: 17,
+        },
+        'pixel-4321': {
+          pixelId: 'pixel-4321',
+          dieType: 'd6',
+          connectionState: 'connected',
+          batteryLevel: 64,
+          lastFace: 3,
+        },
+      },
     })
 
-    expect(useAppStore.getState().settings.historyLength).toBe(12)
+    renderSettingsScreen()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Flash all dice' }))
+    })
+
+    expect(glowDieMock).toHaveBeenCalledTimes(2)
+    expect(glowDieMock).toHaveBeenCalledWith('pixel-1234')
+    expect(glowDieMock).toHaveBeenCalledWith('pixel-4321')
   })
 
   it('shows recent roll events from the Pixels service subscription', () => {

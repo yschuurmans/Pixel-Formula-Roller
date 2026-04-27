@@ -1,6 +1,6 @@
 # Pixel Formula Roller
 
-Android-native dice roller for [Pixels electronic dice](https://gamewithpixels.com/). Build dice formulas visually or via text, roll them, and let the app reconnect nearby remembered dice automatically when the app opens.
+Android-native dice roller for [Pixels electronic dice](https://gamewithpixels.com/). The current app shell, native BLE bridge, die discovery, direct device deployment, and hardware verification flow are all working on Android.
 
 ## Prerequisites
 
@@ -40,6 +40,15 @@ npx cap run android --target <device-id>
 
 That command should build, install, and launch directly on the connected phone. The normal workflow does not involve copying APK files to the phone or installing them manually.
 
+Full setup, PowerShell environment examples, Gradle fallback commands, logcat usage, and troubleshooting are documented in [docs/guides/deploy-to-android-phone.md](docs/guides/deploy-to-android-phone.md).
+
+## Current Implemented Surface
+
+- Native Android BLE runs through a Capacitor bridge and is used by the React app via `src/services/pixelsTransport.ts` and `src/services/pixelsService.ts`
+- The Settings screen can connect a die, show battery/connection state, and display recent roll events from hardware
+- The app can build, install, and relaunch directly on a USB-connected phone without manual APK transfer
+- Formula creation and full roll-engine orchestration are still backlog work
+
 ## Optional Live Reload
 
 ```bash
@@ -59,7 +68,7 @@ npx cap run android --target <device-id> -l --external
 | Styling | Tailwind CSS v4 + Press Start 2P font |
 | State | Zustand with persist middleware |
 | Routing | React Router v6 |
-| Bluetooth | Android BLE bridge |
+| Bluetooth | Native Android BLE via a Capacitor bridge |
 | Formula parsing | `rpg-dice-roller` |
 | Date formatting | `date-fns` |
 | Tests | Vitest + Testing Library |

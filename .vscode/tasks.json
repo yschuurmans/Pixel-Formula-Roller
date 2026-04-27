@@ -2,6 +2,74 @@
 	"version": "2.0.0",
 	"tasks": [
 		{
+			"label": "Android: Check connected phone",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\android-phone-deploy.ps1",
+				"-Mode",
+				"check-device"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "Android: Full deploy to phone",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\android-phone-deploy.ps1",
+				"-Mode",
+				"full-deploy",
+				"-DeviceId",
+				"${input:androidDeviceId}"
+			],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Android: Install debug to phone",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\android-phone-deploy.ps1",
+				"-Mode",
+				"install-debug"
+			],
+			"group": "build",
+			"problemMatcher": []
+		},
+		{
+			"label": "Android: PixelsBle logcat",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\android-phone-deploy.ps1",
+				"-Mode",
+				"logcat"
+			],
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
 			"label": "Run Android live-reload host",
 			"type": "shell",
 			"command": "npm",
@@ -14,6 +82,14 @@
 			],
 			"isBackground": true,
 			"group": "build"
+		}
+	],
+	"inputs": [
+		{
+			"id": "androidDeviceId",
+			"type": "promptString",
+			"description": "Android device id for npx cap run android --target",
+			"default": ""
 		}
 	]
 }

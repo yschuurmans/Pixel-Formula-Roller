@@ -1,25 +1,31 @@
+import { Color } from '@systemic-games/pixels-web-connect'
 import {
-  Color,
+  getBleAvailability,
   getBluetoothCapabilities,
   getPixel,
-  requestPixel,
+  requestPixels,
   repeatConnect,
+  type PixelsBleAvailability,
   type Pixel,
   type PixelStatusEvent,
-} from '@systemic-games/pixels-web-connect'
+} from './pixelsTransport'
 import type { DieType } from '../types/formula'
 import { useAppStore } from '../stores/useAppStore'
 
 const ROLL_DEDUP_MS = 300
+const CONNECTED_GLOW_COLOR: GlowColor = { r: 34, g: 197, b: 94 }
 const PERMISSION_DENIED_MESSAGE = "Bluetooth permission denied. Tap 'Connect' to try again."
 const NO_PAIRED_DICE_MESSAGE = 'No paired dice available. Connect a die first.'
 const NO_RECONNECTABLE_DICE_MESSAGE = 'No paired dice were available to reconnect.'
 const SILENT_RECONNECT_UNAVAILABLE_MESSAGE = "Automatic reconnect is unavailable in this build. Tap 'Reconnect paired dice' or 'Connect new die' to select the die again."
+const BLUETOOTH_DISABLED_MESSAGE = 'Bluetooth is turned off. Enable it and try again.'
 
 export const BLE_UNAVAILABLE_MESSAGES = {
   unavailable: 'Bluetooth is unavailable on this build. Run the app on a supported Android device.',
   nativeBridgeMissing: 'Bluetooth is unavailable in this Android build because the native Pixels BLE bridge is not implemented yet.',
 } as const
+
+let cachedBleUnavailableMessage: string | null = null
 
 export type Unsubscribe = () => void
 
@@ -95,6 +101,10 @@ export function getBleUnavailableMessage(
   probe: BleCapabilityProbe = navigator as BleCapabilityProbe,
   runtime: BleRuntimeProbe = getBleRuntimeProbe(),
 ): string | null {
+  if (cachedBleUnavailableMessage) {
+    return cachedBleUnavailableMessage
+  }
+
   if (hasBleSupport(probe, runtime)) {
     return null
   }
@@ -151,11 +161,26 @@ export class PixelsService {
     this.store = store
   }
 
-  initializeBleSupport(
+  async initializeBleSupport(
     probe: BleCapabilityProbe = navigator as BleCapabilityProbe,
     runtime: BleRuntimeProbe = getBleRuntimeProbe(),
-  ): void {
-    this.store.setState({ bleAvailable: hasBleSupport(probe, runtime) })
+    availability?: PixelsBleAvailability,
+  ): Promise<void> {
+    const resolvedAvailability = availability ?? await getBleAvailability()
+    const bleAvailable = hasBleSupport(probe, runtime) && resolvedAvailability.available
+
+    cachedBleUnavailableMessage = bleAvailable
+      ? null
+      : resolvedAvailability.permissionsGranted
+        ? resolvedAvailability.bluetoothEnabled
+          ? getBleUnavailableMessage(probe, runtime)
+          : BLUETOOTH_DISABLED_MESSAGE
+        : PERMISSION_DENIED_MESSAGE
+
+    this.store.setState({
+      bleAvailable,
+      bleError: !resolvedAvailability.permissionsGranted ? PERMISSION_DENIED_MESSAGE : null,
+    })
   }
 
   async connectDie(): Promise<void> {
@@ -167,8 +192,8 @@ export class PixelsService {
     }
 
     try {
-      const pixel = await requestPixel()
-      await this.connectRegisteredPixel(pixel)
+      const pixels = await requestPixels()
+      await Promise.all(pixels.map((pixel) => this.connectRegisteredPixel(pixel)))
     } catch (error) {
       this.store.getState().setBleError(toErrorMessage(error))
     }
@@ -212,8 +237,8 @@ export class PixelsService {
     if (reconnectedCount === 0) {
       if (allowPromptFallback && !capabilities.persistentPermissions) {
         try {
-          const pixel = await requestPixel()
-          await this.connectRegisteredPixel(pixel)
+          const pixels = await requestPixels()
+          await Promise.all(pixels.map((pixel) => this.connectRegisteredPixel(pixel)))
           return
         } catch (error) {
           if (!suppressFailureError) {
@@ -244,6 +269,12 @@ export class PixelsService {
       this.cleanupPixel(pixelId)
       this.store.getState().updatePixelState(pixelId, { connectionState: 'disconnected' })
     }
+  }
+
+  async forgetDie(pixelId: string): Promise<void> {
+    await this.disconnectDie(pixelId)
+    this.store.getState().forgetPairedPixelId(pixelId)
+    this.store.getState().removePixel(pixelId)
   }
 
   onRollResult(callback: RollResultCallback): Unsubscribe {
@@ -301,6 +332,8 @@ export class PixelsService {
       batteryLevel: Number.isFinite(pixel.batteryLevel) ? pixel.batteryLevel : null,
       lastFace: null,
     })
+
+    await pixel.blink(toBlinkColor(CONNECTED_GLOW_COLOR)).catch(() => undefined)
 
     return true
   }
@@ -376,8 +409,8 @@ function normalizeRollFace(dieType: DieType, face: number): number {
 
 export const pixelsService = new PixelsService()
 
-export function initializeBleSupport(): void {
-  pixelsService.initializeBleSupport()
+export async function initializeBleSupport(): Promise<void> {
+  await pixelsService.initializeBleSupport()
 }
 
 export async function connectDie(): Promise<void> {
@@ -390,6 +423,10 @@ export async function reconnectPairedDice(options?: ReconnectOptions): Promise<v
 
 export async function disconnectDie(pixelId: string): Promise<void> {
   await pixelsService.disconnectDie(pixelId)
+}
+
+export async function forgetDie(pixelId: string): Promise<void> {
+  await pixelsService.forgetDie(pixelId)
 }
 
 export function onRollResult(callback: RollResultCallback): Unsubscribe {

@@ -4,10 +4,13 @@ import { useNavigate } from 'react-router-dom'
 import {
   connectDie,
   disconnectDie,
+  forgetDie,
   getBleUnavailableMessage,
+  glowDie,
   onRollResult,
   reconnectPairedDice,
 } from '../services/pixelsService'
+import { DieIcon } from '../components/DieResultChip'
 import type { DieType } from '../types/formula'
 import { useAppStore } from '../stores/useAppStore'
 
@@ -23,17 +26,20 @@ function displayDieType(dieType: DieType): string {
   return dieType === 'd100' ? 'd%' : dieType
 }
 
+function connectionStatusLabel(connectionState: 'connected' | 'disconnected'): string {
+  return connectionState === 'connected' ? 'Connected' : 'Disconnected'
+}
+
 export default function SettingsScreen() {
   const navigate = useNavigate()
   const pixels = useAppStore((state) => state.pixels)
-  const settings = useAppStore((state) => state.settings)
   const pairedPixelIds = useAppStore((state) => state.pairedPixelIds)
   const bleAvailable = useAppStore((state) => state.bleAvailable)
   const bleError = useAppStore((state) => state.bleError)
-  const updateSettings = useAppStore((state) => state.updateSettings)
   const clearBleError = useAppStore((state) => state.clearBleError)
 
   const [isConnecting, setIsConnecting] = useState(false)
+  const [isFlashingAll, setIsFlashingAll] = useState(false)
   const [isReconnecting, setIsReconnecting] = useState(false)
   const [recentRolls, setRecentRolls] = useState<RecentRollEntry[]>([])
   const [toast, setToast] = useState<string | null>(null)
@@ -60,6 +66,11 @@ export default function SettingsScreen() {
     : pairedPixelIds.length === 0
       ? 'Connect a die once to enable reconnect.'
       : undefined
+
+  const connectedPixelIds = useMemo(
+    () => pixelEntries.filter((pixel) => pixel.connectionState === 'connected').map((pixel) => pixel.pixelId),
+    [pixelEntries],
+  )
 
   useEffect(() => {
     const unsubscribe = onRollResult((pixelId, face, dieType) => {
@@ -108,13 +119,17 @@ export default function SettingsScreen() {
     }
   }
 
-  const handleHistoryLengthChange = (value: string) => {
-    const parsed = Number(value)
-    if (!Number.isFinite(parsed)) {
-      return
-    }
+  const handleFlashDie = async (pixelId: string) => {
+    await glowDie(pixelId)
+  }
 
-    updateSettings({ historyLength: Math.min(50, Math.max(1, parsed)) })
+  const handleFlashAllDice = async () => {
+    setIsFlashingAll(true)
+    try {
+      await Promise.all(connectedPixelIds.map((pixelId) => glowDie(pixelId)))
+    } finally {
+      setIsFlashingAll(false)
+    }
   }
 
   return (
@@ -128,7 +143,7 @@ export default function SettingsScreen() {
 
           <button
             type="button"
-            onClick={() => navigate(-1)}
+            onClick={() => navigate('/', { replace: true })}
             className="border-2 border-[#7d6b95] bg-[#251d2e] px-4 py-3 text-[10px] text-[#f7ead4] shadow-[4px_4px_0_0_#09070d] transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
           >
             ← Back
@@ -164,6 +179,15 @@ export default function SettingsScreen() {
                 >
                   {isReconnecting ? 'Reconnecting…' : 'Reconnect paired dice'}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => void handleFlashAllDice()}
+                  disabled={connectedPixelIds.length === 0 || isFlashingAll}
+                  title={connectedPixelIds.length === 0 ? 'Connect a die to flash it.' : undefined}
+                  className="border-2 border-[#ffd166] bg-[#3b2a11] px-4 py-3 text-[10px] text-[#fff0bf] shadow-[4px_4px_0_0_#120c06] transition-transform disabled:cursor-not-allowed disabled:border-[#61563b] disabled:bg-[#272319] disabled:text-[#a89b76] disabled:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+                >
+                  {isFlashingAll ? 'Flashing…' : 'Flash all dice'}
+                </button>
               </div>
             </div>
 
@@ -182,12 +206,28 @@ export default function SettingsScreen() {
                 {pixelEntries.map((pixel) => (
                   <li
                     key={pixel.pixelId}
-                    className="flex flex-col gap-4 border-2 border-[#5d4a7a] bg-[#1b1522] p-3 shadow-[5px_5px_0_0_#09070d] md:flex-row md:items-center md:justify-between"
+                    className="relative flex flex-col gap-4 border-2 border-[#5d4a7a] bg-[#1b1522] p-3 shadow-[5px_5px_0_0_#09070d] md:flex-row md:items-center md:justify-between"
                   >
+                    <span
+                      aria-label={connectionStatusLabel(pixel.connectionState)}
+                      title={connectionStatusLabel(pixel.connectionState)}
+                      className={`absolute right-3 top-3 h-3 w-3 rounded-full border ${
+                        pixel.connectionState === 'connected'
+                          ? 'border-[#b7f7cd] bg-[#22c55e]'
+                          : 'border-[#ffc6ce] bg-[#ef4444]'
+                      }`}
+                    />
                     <div className="flex items-start gap-3">
-                      <div className="flex h-12 w-12 items-center justify-center border-2 border-[#ffd166] bg-[#3b2a11] text-[10px] text-[#fff0bf]">
-                        {displayDieType(pixel.dieType)}
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void handleFlashDie(pixel.pixelId)}
+                        disabled={pixel.connectionState !== 'connected'}
+                        aria-label={`Flash Pixel ${pixel.pixelId.slice(-4)}`}
+                        title={pixel.connectionState === 'connected' ? 'Flash die' : 'Connect the die to flash it.'}
+                        className="flex h-12 w-12 items-center justify-center rounded-none border-2 border-[#ffd166] bg-[#3b2a11] text-[#fff0bf] shadow-[3px_3px_0_0_#120c06] transition-transform disabled:cursor-not-allowed disabled:border-[#61563b] disabled:bg-[#272319] disabled:text-[#a89b76] disabled:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+                      >
+                        <DieIcon dieType={pixel.dieType} className="h-9 w-9" />
+                      </button>
                       <div>
                         <p className="text-[10px] uppercase tracking-[0.2em] text-[#c5b7d8]">
                           Pixel …{pixel.pixelId.slice(-4)}
@@ -201,17 +241,7 @@ export default function SettingsScreen() {
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-3">
-                      <span
-                        className={`border-2 px-3 py-2 text-[9px] ${
-                          pixel.connectionState === 'connected'
-                            ? 'border-[#86efac] bg-[#17301f] text-[#d7ffe5]'
-                            : 'border-[#fda4af] bg-[#35181f] text-[#ffe3e6]'
-                        }`}
-                      >
-                        {pixel.connectionState}
-                      </span>
-
+                    <div className="flex flex-wrap items-center justify-end gap-3 md:max-w-[16rem]">
                       <button
                         type="button"
                         onClick={() => disconnectDie(pixel.pixelId)}
@@ -219,6 +249,13 @@ export default function SettingsScreen() {
                         className="border-2 border-[#fda4af] bg-[#35181f] px-4 py-3 text-[10px] text-[#ffe3e6] disabled:cursor-not-allowed disabled:border-[#5b494e] disabled:bg-[#272022] disabled:text-[#9a878c]"
                       >
                         Disconnect
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void forgetDie(pixel.pixelId)}
+                        className="border-2 border-[#ff8f66] bg-[#3c1d10] px-4 py-3 text-[10px] text-[#ffe2d6]"
+                      >
+                        Forget
                       </button>
                     </div>
                   </li>
@@ -258,26 +295,6 @@ export default function SettingsScreen() {
                   ))}
                 </ol>
               )}
-            </section>
-
-            <section className="border-2 border-[#8a72a8] bg-[#15111a] p-4 shadow-[6px_6px_0_0_#09070d]">
-              <h2 className="text-sm text-[#f7ead4]">History Length</h2>
-              <p className="mt-2 text-[9px] leading-relaxed text-[#c5b7d8]">
-                Changes persist immediately. Existing history is only trimmed the next time a new roll is written.
-              </p>
-
-              <label className="mt-4 block text-[10px] text-[#f7ead4]" htmlFor="history-length">
-                Saved roll history count
-              </label>
-              <input
-                id="history-length"
-                type="number"
-                min={1}
-                max={50}
-                value={settings.historyLength}
-                onChange={(event) => handleHistoryLengthChange(event.target.value)}
-                className="mt-3 w-full border-2 border-[#7d6b95] bg-[#1b1522] px-3 py-3 text-[10px] text-[#f7ead4] outline-none"
-              />
             </section>
           </div>
         </div>

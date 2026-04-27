@@ -3,27 +3,33 @@ import { PixelsService, getBleUnavailableMessage } from '../pixelsService'
 import { useAppStore } from '../../stores/useAppStore'
 
 const {
-  requestPixelMock,
+  getBleAvailabilityMock,
+  requestPixelsMock,
   repeatConnectMock,
   getPixelMock,
   getBluetoothCapabilitiesMock,
 } = vi.hoisted(() => ({
-  requestPixelMock: vi.fn(),
+  getBleAvailabilityMock: vi.fn(async () => ({
+    available: true,
+    bluetoothEnabled: true,
+    permissionsGranted: true,
+    missingPermissions: [],
+    nativeBridge: false,
+  })),
+  requestPixelsMock: vi.fn(),
   repeatConnectMock: vi.fn(),
   getPixelMock: vi.fn(),
   getBluetoothCapabilitiesMock: vi.fn(() => ({ bluetooth: true, persistentPermissions: true })),
 }))
 
-vi.mock('@systemic-games/pixels-web-connect', async () => {
-  const actual = await vi.importActual<typeof import('@systemic-games/pixels-web-connect')>(
-    '@systemic-games/pixels-web-connect',
-  )
-
+vi.mock('../pixelsTransport', async () => {
+  const actual = await vi.importActual<typeof import('../pixelsTransport')>('../pixelsTransport')
   return {
     ...actual,
+    getBleAvailability: getBleAvailabilityMock,
     getBluetoothCapabilities: getBluetoothCapabilitiesMock,
     getPixel: getPixelMock,
-    requestPixel: requestPixelMock,
+    requestPixels: requestPixelsMock,
     repeatConnect: repeatConnectMock,
   }
 })
@@ -31,7 +37,10 @@ vi.mock('@systemic-games/pixels-web-connect', async () => {
 type PixelEventMap = {
   roll: number
   battery: { level: number; isCharging: boolean }
-  statusChanged: { status: 'disconnected' | 'connecting' | 'identifying' | 'ready' | 'disconnecting'; lastStatus: 'disconnected' | 'connecting' | 'identifying' | 'ready' | 'disconnecting' }
+  statusChanged: {
+    status: 'disconnected' | 'connecting' | 'identifying' | 'ready' | 'disconnecting'
+    lastStatus: 'disconnected' | 'connecting' | 'identifying' | 'ready' | 'disconnecting'
+  }
 }
 
 class FakePixel {
@@ -88,25 +97,58 @@ function setNavigatorBluetooth(value: unknown) {
 }
 
 describe('pixelsService', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useRealTimers()
-    requestPixelMock.mockReset()
+    getBleAvailabilityMock.mockReset()
+    getBleAvailabilityMock.mockResolvedValue({
+      available: true,
+      bluetoothEnabled: true,
+      permissionsGranted: true,
+      missingPermissions: [],
+      nativeBridge: false,
+    })
+    requestPixelsMock.mockReset()
     repeatConnectMock.mockReset()
     getPixelMock.mockReset()
     getBluetoothCapabilitiesMock.mockReset()
     getBluetoothCapabilitiesMock.mockReturnValue({ bluetooth: true, persistentPermissions: true })
     resetStore()
     setNavigatorBluetooth({})
+    await new PixelsService(useAppStore).initializeBleSupport({ bluetooth: {} })
   })
 
-  it('marks BLE unavailable on init when the Bluetooth bridge is missing', () => {
+  it('marks BLE unavailable on init when the Bluetooth bridge is missing', async () => {
     const service = new PixelsService(useAppStore)
 
-    service.initializeBleSupport({
+    await service.initializeBleSupport({
       bluetooth: undefined,
     })
 
     expect(useAppStore.getState().bleAvailable).toBe(false)
+  })
+
+  it('keeps BLE available on init when only Android permissions are missing', async () => {
+    const service = new PixelsService(useAppStore)
+
+    await service.initializeBleSupport(
+      {
+        bluetooth: {},
+      },
+      {
+        isNativeAndroid: true,
+        hasNativeBridge: true,
+      },
+      {
+        available: true,
+        bluetoothEnabled: true,
+        permissionsGranted: false,
+        missingPermissions: ['android.permission.BLUETOOTH_SCAN'],
+        nativeBridge: true,
+      },
+    )
+
+    expect(useAppStore.getState().bleAvailable).toBe(true)
+    expect(useAppStore.getState().bleError).toBe("Bluetooth permission denied. Tap 'Connect' to try again.")
   })
 
   it('returns a generic unavailable message when Bluetooth is missing', () => {
@@ -118,6 +160,14 @@ describe('pixelsService', () => {
   })
 
   it('returns an Android bridge message when the native shell has no Pixels BLE plugin', () => {
+    getBleAvailabilityMock.mockResolvedValue({
+      available: true,
+      bluetoothEnabled: true,
+      permissionsGranted: true,
+      missingPermissions: [],
+      nativeBridge: false,
+    })
+
     expect(
       getBleUnavailableMessage(
         {
@@ -133,7 +183,7 @@ describe('pixelsService', () => {
 
   it('connects a die, stores it, and updates battery from events', async () => {
     const pixel = new FakePixel({ systemId: 'pixel-1', dieType: 'd6', batteryLevel: 42 })
-    requestPixelMock.mockResolvedValue(pixel)
+    requestPixelsMock.mockResolvedValue([pixel])
     repeatConnectMock.mockResolvedValue(undefined)
     const service = new PixelsService(useAppStore)
 
@@ -148,6 +198,11 @@ describe('pixelsService', () => {
       lastFace: null,
     })
     expect(useAppStore.getState().pairedPixelIds).toEqual(['pixel-1'])
+    expect(pixel.blink).toHaveBeenCalledTimes(1)
+    const connectBlinkColor = pixel.blinkCalls[0] as { rByte: number; gByte: number; bByte: number }
+    expect(connectBlinkColor.rByte).toBe(34)
+    expect(connectBlinkColor.gByte).toBe(197)
+    expect(connectBlinkColor.bByte).toBe(94)
 
     pixel.emit('battery', { level: 88, isCharging: false })
     expect(useAppStore.getState().pixels['pixel-1']?.batteryLevel).toBe(88)
@@ -177,14 +232,14 @@ describe('pixelsService', () => {
     useAppStore.setState({ pairedPixelIds: ['pixel-10'] })
     getPixelMock.mockResolvedValue(undefined)
     getBluetoothCapabilitiesMock.mockReturnValue({ bluetooth: true, persistentPermissions: false })
-    requestPixelMock.mockResolvedValue(pixel)
+    requestPixelsMock.mockResolvedValue([pixel])
     repeatConnectMock.mockResolvedValue(undefined)
     const service = new PixelsService(useAppStore)
 
     await service.reconnectPairedDice({ allowPromptFallback: true })
 
     expect(getPixelMock).toHaveBeenCalledWith('pixel-10')
-    expect(requestPixelMock).toHaveBeenCalledTimes(1)
+    expect(requestPixelsMock).toHaveBeenCalledTimes(1)
     expect(repeatConnectMock).toHaveBeenCalledWith(pixel)
     expect(useAppStore.getState().pixels['pixel-10']).toMatchObject({
       pixelId: 'pixel-10',
@@ -195,7 +250,7 @@ describe('pixelsService', () => {
   })
 
   it('sets the permission denied error without throwing when connect is rejected', async () => {
-    requestPixelMock.mockRejectedValue(new DOMException('Permission denied', 'NotAllowedError'))
+    requestPixelsMock.mockRejectedValue(new DOMException('Permission denied', 'NotAllowedError'))
     const service = new PixelsService(useAppStore)
 
     await expect(service.connectDie()).resolves.toBeUndefined()
@@ -207,7 +262,7 @@ describe('pixelsService', () => {
     vi.setSystemTime(new Date('2026-04-27T00:00:00.000Z'))
 
     const pixel = new FakePixel({ systemId: 'pixel-2', dieType: 'd00' })
-    requestPixelMock.mockResolvedValue(pixel)
+    requestPixelsMock.mockResolvedValue([pixel])
     repeatConnectMock.mockResolvedValue(undefined)
     const service = new PixelsService(useAppStore)
     const callback = vi.fn()
@@ -230,7 +285,7 @@ describe('pixelsService', () => {
 
   it('glows and stops glow for a connected die', async () => {
     const pixel = new FakePixel({ systemId: 'pixel-3', dieType: 'd20' })
-    requestPixelMock.mockResolvedValue(pixel)
+    requestPixelsMock.mockResolvedValue([pixel])
     repeatConnectMock.mockResolvedValue(undefined)
     const service = new PixelsService(useAppStore)
 
@@ -238,8 +293,8 @@ describe('pixelsService', () => {
     await service.glowDie('pixel-3', { r: 12, g: 34, b: 56 })
     await service.stopGlow('pixel-3')
 
-    expect(pixel.blink).toHaveBeenCalledTimes(1)
-    const blinkColor = pixel.blinkCalls[0] as { rByte: number; gByte: number; bByte: number }
+    expect(pixel.blink).toHaveBeenCalledTimes(2)
+    const blinkColor = pixel.blinkCalls[1] as { rByte: number; gByte: number; bByte: number }
     expect(blinkColor.rByte).toBe(12)
     expect(blinkColor.gByte).toBe(34)
     expect(blinkColor.bByte).toBe(56)
@@ -248,7 +303,7 @@ describe('pixelsService', () => {
 
   it('disconnects a die and marks it disconnected in store', async () => {
     const pixel = new FakePixel({ systemId: 'pixel-4', dieType: 'd8' })
-    requestPixelMock.mockResolvedValue(pixel)
+    requestPixelsMock.mockResolvedValue([pixel])
     repeatConnectMock.mockResolvedValue(undefined)
     const service = new PixelsService(useAppStore)
 
@@ -257,5 +312,34 @@ describe('pixelsService', () => {
 
     expect(pixel.disconnect).toHaveBeenCalledTimes(1)
     expect(useAppStore.getState().pixels['pixel-4']?.connectionState).toBe('disconnected')
+  })
+
+  it('connects every discovered Pixels die from the native scan', async () => {
+    const firstPixel = new FakePixel({ systemId: 'pixel-a', dieType: 'd6', batteryLevel: 21 })
+    const secondPixel = new FakePixel({ systemId: 'pixel-b', dieType: 'd20', batteryLevel: 64 })
+    requestPixelsMock.mockResolvedValue([firstPixel, secondPixel])
+    repeatConnectMock.mockResolvedValue(undefined)
+    const service = new PixelsService(useAppStore)
+
+    await service.connectDie()
+
+    expect(repeatConnectMock).toHaveBeenCalledTimes(2)
+    expect(useAppStore.getState().pairedPixelIds).toEqual(['pixel-a', 'pixel-b'])
+    expect(useAppStore.getState().pixels['pixel-a']?.connectionState).toBe('connected')
+    expect(useAppStore.getState().pixels['pixel-b']?.connectionState).toBe('connected')
+  })
+
+  it('forgets a die so it is removed from reconnect memory', async () => {
+    const pixel = new FakePixel({ systemId: 'pixel-5', dieType: 'd8' })
+    requestPixelsMock.mockResolvedValue([pixel])
+    repeatConnectMock.mockResolvedValue(undefined)
+    const service = new PixelsService(useAppStore)
+
+    await service.connectDie()
+    await service.forgetDie('pixel-5')
+
+    expect(pixel.disconnect).toHaveBeenCalledTimes(1)
+    expect(useAppStore.getState().pairedPixelIds).toEqual([])
+    expect(useAppStore.getState().pixels['pixel-5']).toBeUndefined()
   })
 })

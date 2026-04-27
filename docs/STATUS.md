@@ -1,6 +1,6 @@
 # Project Status — Last updated 2026-04-27
 
-> Product-spec pivot note: the target product is now Android-only. Android shell and native BLE bridge work are the remaining platform blockers.
+> Product-spec pivot note: the target product is Android-only and now runs through a working Capacitor Android shell with a native BLE bridge.
 
 ## Stories
 
@@ -11,9 +11,11 @@
 | STORY-002 | ✅ Done | Parser/service verified, regression covered, clean test/build |
 | STORY-003 | ✅ Done | BLE service layer implemented and validated |
 | STORY-004 | ✅ Done | Main Screen UI implemented and validated |
+| STORY-005 | ✅ Done | Formula screen implemented, validated, and deployed to Android device |
+| STORY-006a | ✅ Done | Roll engine wired into FormulaScreen, including sequential rolling and manual fallback handoff |
 | STORY-007 | ✅ Done | Pulled ahead for hardware verification; includes live recent-roll monitor |
-| STORY-005, STORY-006a, STORY-006b, STORY-009 | 🔲 Backlog | Formula flow and roll engine remain |
-| STORY-008 (Android packaging/device workflow) | 🔲 Backlog | Direct build/install/run to a connected phone; no manual APK transfer |
+| STORY-008 | ✅ Done | Direct device build/install/run workflow verified on physical Android hardware |
+| STORY-006b, STORY-009, STORY-010 | 🔲 Backlog | Result panel polish, manual-entry finish work, and remembered-die confirmation flow remain |
 
 ## STORY-002 — Closed out
 
@@ -32,7 +34,9 @@ src/
                                PickerState)
   services/
     formulaParser.ts        ✅ All 5 functions implemented and tested
-    pixelsService.ts        ✅ BLE connect/disconnect, roll subscriptions, battery, glow
+    pixelsService.ts        ✅ Native Android BLE connect/disconnect, reconnect,
+                               roll subscriptions, battery, glow
+    pixelsTransport.ts      ✅ Capacitor-native Pixels transport/session bridge
     __tests__/
       formulaParserSmoke.test.ts   ✅ 1 test (rpg-dice-roller smoke)
       formulaParser.test.ts        ✅ Parser coverage
@@ -40,14 +44,16 @@ src/
   stores/useAppStore.ts     ✅ Zustand store with BLE state + quota-safe persist
   pages/
     MainScreen.tsx          ✅ Implemented
-    FormulaScreen.tsx       ✅ Stub
+    FormulaScreen.tsx       ✅ Implemented, including roll engine and core manual fallback
     SettingsScreen.tsx      ✅ Hardware verification UI implemented
   main.tsx                  ✅ Routes wired
   index.css                 ✅ Tailwind + retro base styling
 ```
 
-**`npm test`**: 63/63 passing  
-**`npm run build`**: Clean
+**Focused validations completed**:
+- `npm test -- src/services/__tests__/pixelsService.test.ts src/pages/__tests__/SettingsScreen.test.tsx`
+- `npm run build`
+- `android/.\gradlew.bat app:installDebug`
 
 ## Reprioritized order
 
@@ -56,19 +62,19 @@ Hardware validation now happens through STORY-007 before the formula flow storie
 1. STORY-003 — BLE service layer
 2. STORY-004 — Main Screen UI
 3. STORY-007 — Settings screen and live hardware verification
-4. STORY-005 — Formula editor
-5. STORY-006a — Roll engine
-6. STORY-006b — Result panel
+4. STORY-006b — Result panel
+5. STORY-009 — Manual entry fallback polish
+6. STORY-010 — Forget remembered die confirmation + persistence UX
 
 ## What to build next
 
-File: `docs/stories/backlog/STORY-005-formula-screen.md`
+File: `docs/stories/backlog/STORY-006b-result-panel.md`
 
-The next blocker after hardware verification is the formula editor so saved formulas can actually be created and edited from the new UI.
+The next blocker after the implemented roll engine is the result panel so completed rolls can match the planned modal/bottom-sheet display and close semantics.
 
 ## Known issues / watch-outs
 
-- Android bridge implementation is still pending; current BLE code is an interim adapter surface.
 - `rpg-dice-roller` is v5.0.0 (not 5.5.0)
-- Node.js is at `/mnt/c/nvm4w/nodejs/` — only accessible with `dangerouslyDisableSandbox: true`
-- d100 face range from hardware is still unconfirmed — code has a verification note for the current assumption
+- d100 face range from hardware is still unconfirmed — code still carries the current verification note
+- Forgetting a remembered die is now tracked as follow-up story `docs/stories/backlog/STORY-010-forget-remembered-die.md`
+- STORY-009 is only partially satisfied today: manual fallback works, but its planned result-panel labeling still depends on STORY-006b

@@ -28,7 +28,7 @@ describe('useAppStore persistence', () => {
     useAppStore.setState({
       savedFormulas: [],
       rollHistory: [],
-      settings: { historyLength: 6, theme: 'dark' },
+      settings: { theme: 'dark' },
       pairedPixelIds: [],
       bleAvailable: true,
       bleError: null,
@@ -48,20 +48,13 @@ describe('useAppStore persistence', () => {
       .mockImplementation(() => undefined)
 
     useAppStore.setState({
-      rollHistory: [
-        baseHistoryEntry('1'),
-        baseHistoryEntry('2'),
-        baseHistoryEntry('3'),
-        baseHistoryEntry('4'),
-        baseHistoryEntry('5'),
-        baseHistoryEntry('6'),
-      ],
+      rollHistory: Array.from({ length: 30 }, (_, index) => baseHistoryEntry(String(index + 1))),
     })
 
     expect(setItemSpy).toHaveBeenCalledTimes(2)
 
     const retriedPayload = JSON.parse(setItemSpy.mock.calls[1][1])
-    expect(retriedPayload.state.rollHistory).toHaveLength(3)
+    expect(retriedPayload.state.rollHistory).toHaveLength(25)
     expect(warningListener).toHaveBeenCalledTimes(1)
     expect((warningListener.mock.calls[0][0] as CustomEvent<{ message: string }>).detail.message).toBe(
       STORAGE_WARNING_MESSAGE,
@@ -71,7 +64,7 @@ describe('useAppStore persistence', () => {
     setItemSpy.mockRestore()
   })
 
-  it('migrates the old default history length to 5', async () => {
+  it('drops legacy history length settings and keeps dark theme on migrate', async () => {
     const migrate = useAppStore.persist.getOptions().migrate
 
     const migrated = await migrate?.(
@@ -81,10 +74,10 @@ describe('useAppStore persistence', () => {
         settings: { historyLength: 50, theme: 'dark' },
         pairedPixelIds: ['pixel-1'],
       },
-      0,
+      1,
     )
 
-    expect(migrated?.settings.historyLength).toBe(5)
+    expect(migrated?.settings).toEqual({ theme: 'dark' })
     expect(migrated?.pairedPixelIds).toEqual(['pixel-1'])
   })
 })

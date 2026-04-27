@@ -1,27 +1,49 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { HashRouter, Routes, Route } from 'react-router-dom'
+import { createHashRouter, RouterProvider } from 'react-router-dom'
 import './index.css'
 import MainScreen from './pages/MainScreen'
 import FormulaScreen from './pages/FormulaScreen'
 import SettingsScreen from './pages/SettingsScreen'
 import { initializeBleSupport } from './services/pixelsService'
-import DiagnosticRollHistoryBridge from './components/DiagnosticRollHistoryBridge'
 import PairedDiceReconnectBridge from './components/PairedDiceReconnectBridge'
+import AndroidBackButtonBridge from './components/AndroidBackButtonBridge'
+import DiagnosticRollHistoryBridge from './components/DiagnosticRollHistoryBridge'
 
-initializeBleSupport()
+void initializeBleSupport()
+
+const router = createHashRouter([
+  {
+    path: '/',
+    element: (
+      <>
+        <DiagnosticRollHistoryBridge />
+        <MainScreen />
+      </>
+    ),
+  },
+  {
+    path: '/formula/new',
+    element: <FormulaScreen />,
+  },
+  {
+    path: '/formula/:id',
+    element: <FormulaScreen />,
+  },
+  {
+    path: '/roll/:id',
+    element: <FormulaScreen mode="roll-only" />,
+  },
+  {
+    path: '/settings',
+    element: <SettingsScreen />,
+  },
+])
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <HashRouter>
-      <PairedDiceReconnectBridge />
-      <DiagnosticRollHistoryBridge />
-      <Routes>
-        <Route path="/" element={<MainScreen />} />
-        <Route path="/formula/new" element={<FormulaScreen />} />
-        <Route path="/formula/:id" element={<FormulaScreen />} />
-        <Route path="/settings" element={<SettingsScreen />} />
-      </Routes>
-    </HashRouter>
+    <PairedDiceReconnectBridge />
+    <AndroidBackButtonBridge router={router} />
+    <RouterProvider router={router} />
   </StrictMode>,
 )

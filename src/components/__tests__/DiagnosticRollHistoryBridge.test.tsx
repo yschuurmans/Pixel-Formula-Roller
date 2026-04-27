@@ -27,7 +27,7 @@ function resetStore() {
   useAppStore.setState({
     savedFormulas: [],
     rollHistory: [],
-    settings: { historyLength: 5, theme: 'dark' },
+    settings: { theme: 'dark' },
     pairedPixelIds: [],
     bleAvailable: true,
     bleError: null,

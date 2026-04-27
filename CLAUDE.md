@@ -16,7 +16,7 @@ Android-only mobile app that connects to [Pixels electronic dice](https://gamewi
 | Styling | Tailwind CSS + Press Start 2P font (pixel-art theme) |
 | State | Zustand with `persist` middleware |
 | Routing | React Router v6 |
-| Bluetooth | Native Android BLE via a Capacitor bridge implemented in Kotlin |
+| Bluetooth | Native Android BLE via a Capacitor bridge implemented in Java |
 | Formula parsing | `rpg-dice-roller` (wrapped in `src/services/formulaParser.ts`) |
 | Date formatting | `date-fns` (formatDistanceToNow for history timestamps) |
 | Persistence | On-device storage via Capacitor/Android-backed persistence |
@@ -29,7 +29,7 @@ Android-only mobile app that connects to [Pixels electronic dice](https://gamewi
 
 ## Target Architecture Note
 - The product spec targets Android-only behavior.
-- Future Bluetooth work should converge on a platform BLE adapter backed by a native Android bridge.
+- The current BLE stack is already routed through a native Android bridge; future work should extend that same platform adapter rather than reintroducing browser BLE.
 
 ## Canonical Die Type
 Internal token: `"d4" | "d6" | "d8" | "d10" | "d12" | "d20" | "d100"` (DieType in `src/types/formula.ts`)
@@ -50,7 +50,8 @@ docs/
 src/
   services/
     formulaParser.ts             # rpg-dice-roller wrapper
-    pixelsService.ts             # BLE service facade; migrate to Android platform bridge
+    pixelsService.ts             # BLE service facade over the native Android bridge
+    pixelsTransport.ts           # Capacitor-native PixelSession transport
   stores/
     useAppStore.ts               # Zustand store (formulas, history, settings, pixels)
   types/
@@ -72,6 +73,7 @@ src/
 | **STORY-003** | Android BLE / Pixels service layer | 000, 001 |
 | **STORY-004** | Main Screen UI | 001 (parallel with 002, 003) |
 | **STORY-007** | Settings screen + hardware verification | 001, 003 |
+| **STORY-010** | Settings follow-up — forget remembered die | 003, 007 |
 | **STORY-005** | Formula Screen — picker + text input | 001, 002 |
 | **STORY-006a** | Roll engine — glow, collect, evaluate | 002, 003, 005 |
 | **STORY-006b** | Result Panel — display, Roll Again, history | 006a |
@@ -95,15 +97,14 @@ For hardware-first verification, STORY-007 is intentionally pulled ahead of STOR
 | Blank name on save | Inline validation error (no prompt dialog, no auto-name) |
 | d% / d100 | Canonical internal token: `"d100"`; SDK `"d00"` mapped at BLE boundary |
 | Pixels Zustand slice | `Record<string, PixelEntry>` (plain object), excluded from persist |
+| Forget-die support | Settings includes an explicit destructive [Forget] action separate from [Disconnect] |
 | Result Panel layout | Bottom sheet on mobile (< 768px), modal on desktop (≥ 768px) |
 | Launch behaviour | On app launch/resume, auto-connect all detectable remembered dice |
 
-## Open Questions (pending STORY-000 spike)
+## Open Questions
 
-1. **rpg-dice-roller injection** — can it accept pre-rolled values? → Update STORY-002 evaluateFormula after spike
-2. **d100 face range** — 1–100 or 0–99 from Android BLE events? → Update STORY-002 after device validation
-3. **Formula round-trip** — does rpg-dice-roller normalise strings? → Update STORY-002 after spike
-4. **Android reconnect window** — how long should startup auto-connect scan before surfacing dice as offline? → Update STORY-003 after hardware validation
+1. **d100 face range** — 1–100 or 0–99 from Android BLE events? → code still carries the verification note
+2. **Reconnect tuning** — is the current reconnect scan window appropriate on slower phones and with multiple dice nearby?
 
 ## Development Guidelines
 

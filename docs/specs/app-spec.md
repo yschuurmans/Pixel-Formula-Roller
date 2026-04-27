@@ -1,7 +1,7 @@
 # Pixel Formula Roller — App Specification
 
 > Last updated: 2026-04-27
-> Status: Spec updated for Android-only pivot; current implementation still reflects a web prototype in places
+> Status: Spec updated for Android-only product and aligned with the working Capacitor Android + native BLE implementation
 
 ---
 
@@ -33,7 +33,7 @@ The target product should behave like a dedicated Android Pixels companion app:
 ### Bluetooth
 - **Protocol**: Native Android BLE
 - **Integration shape**: A native Android BLE layer exposed to the React app through a thin Capacitor bridge
-- **Implementation language**: Kotlin on the Android side for BLE scanning, connection, notifications, and reconnect
+- **Implementation language**: Java on the Android side for BLE scanning, connection, notifications, and reconnect
 - **Behavior target**: Automatically reconnect all detectable remembered dice on app launch / resume
 
 ### Persistence
@@ -279,6 +279,9 @@ Appears after a roll completes:
 
 ---
 
+- Each known-die row supports both **Disconnect** and **Forget** actions
+- **Forget** removes the die from remembered state, removes it from the Settings list, and stops future auto-connect until the user manually connects that die again
+
 ## 7. Bluetooth State Management
 
 - App maintains a **Pixel registry** in Zustand keyed by `pixelId`
@@ -469,8 +472,6 @@ This still builds, installs, and launches directly to the phone. No APK transfer
 
 ## 11. Open Questions
 
-1. Which Android BLE abstraction should back the Capacitor bridge: a custom plugin only, or a stable third-party BLE plugin plus Pixels-specific native code?
-2. What is the reconnect scan window on launch / resume before the UI gives up and shows the die as offline?
-3. How should the app behave when Android Bluetooth permissions are denied permanently from system settings?
-4. d% (d100): does the Pixels device report 1–100 or 0–99 on Android? Confirm against real hardware.
-5. Should the app support an explicit "Forget die" action in Settings, or keep all known dice forever until app data is cleared?
+1. How should the app behave when Android Bluetooth permissions are denied permanently from system settings?
+2. d% (d100): does the Pixels device report 1–100 or 0–99 on Android? Confirm against real hardware.
+3. Is the current reconnect scan window on launch / resume sufficient for slower devices and multiple dice?

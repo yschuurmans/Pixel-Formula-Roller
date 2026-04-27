@@ -1,0 +1,41 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "Android: Check connected phone",
+			"type": "node-terminal",
+			"request": "launch",
+			"command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\scripts\\android-phone-deploy.ps1\" -Mode check-device",
+			"cwd": "${workspaceFolder}"
+		},
+		{
+			"name": "Android: Full deploy to phone",
+			"type": "node-terminal",
+			"request": "launch",
+			"command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\scripts\\android-phone-deploy.ps1\" -Mode full-deploy -DeviceId \"${input:androidDeviceId}\"",
+			"cwd": "${workspaceFolder}"
+		},
+		{
+			"name": "Android: Install debug to phone",
+			"type": "node-terminal",
+			"request": "launch",
+			"command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\scripts\\android-phone-deploy.ps1\" -Mode install-debug",
+			"cwd": "${workspaceFolder}"
+		},
+		{
+			"name": "Android: PixelsBle logcat",
+			"type": "node-terminal",
+			"request": "launch",
+			"command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\scripts\\android-phone-deploy.ps1\" -Mode logcat",
+			"cwd": "${workspaceFolder}"
+		}
+	],
+	"inputs": [
+		{
+			"id": "androidDeviceId",
+			"type": "promptString",
+			"description": "Android device id for npx cap run android --target",
+			"default": ""
+		}
+	]
+}
