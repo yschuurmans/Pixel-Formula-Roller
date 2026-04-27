@@ -117,6 +117,20 @@ describe('pixelsService', () => {
     ).toBe('Bluetooth is unavailable on this build. Run the app on a supported Android device.')
   })
 
+  it('returns an Android bridge message when the native shell has no Pixels BLE plugin', () => {
+    expect(
+      getBleUnavailableMessage(
+        {
+          bluetooth: undefined,
+        },
+        {
+          isNativeAndroid: true,
+          hasNativeBridge: false,
+        },
+      ),
+    ).toBe('Bluetooth is unavailable in this Android build because the native Pixels BLE bridge is not implemented yet.')
+  })
+
   it('connects a die, stores it, and updates battery from events', async () => {
     const pixel = new FakePixel({ systemId: 'pixel-1', dieType: 'd6', batteryLevel: 42 })
     requestPixelMock.mockResolvedValue(pixel)

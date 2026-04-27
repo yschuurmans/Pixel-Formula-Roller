@@ -13,7 +13,7 @@ const {
 } = vi.hoisted(() => ({
   connectDieMock: vi.fn(),
   disconnectDieMock: vi.fn(),
-  getBleUnavailableMessageMock: vi.fn(() => 'Bluetooth is unavailable on this build. Run the app on a supported Android device.'),
+  getBleUnavailableMessageMock: vi.fn(() => 'Bluetooth is unavailable in this Android build because the native Pixels BLE bridge is not implemented yet.'),
   reconnectPairedDiceMock: vi.fn(),
   unsubscribeMock: vi.fn(),
 }))
@@ -98,9 +98,9 @@ describe('SettingsScreen', () => {
 
     const button = screen.getByRole('button', { name: 'Connect new die' })
     expect(button).toBeDisabled()
-    expect(button).toHaveAttribute('title', 'Bluetooth is unavailable on this build. Run the app on a supported Android device.')
+    expect(button).toHaveAttribute('title', 'Bluetooth is unavailable in this Android build because the native Pixels BLE bridge is not implemented yet.')
     expect(screen.getByRole('button', { name: 'Reconnect paired dice' })).toBeDisabled()
-    expect(screen.getByText('Bluetooth is unavailable on this build. Run the app on a supported Android device.')).toBeInTheDocument()
+    expect(screen.getByText('Bluetooth is unavailable in this Android build because the native Pixels BLE bridge is not implemented yet.')).toBeInTheDocument()
   })
 
   it('reconnects previously paired dice without opening the picker', async () => {

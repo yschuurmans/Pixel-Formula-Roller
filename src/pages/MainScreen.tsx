@@ -53,7 +53,7 @@ export default function MainScreen() {
 
   const bannerMessage = bleAvailable
     ? null
-    : getBleUnavailableMessage() ?? 'Bluetooth is unavailable on this build. Run the app on a supported Android device.'
+    : getBleUnavailableMessage() ?? 'Bluetooth is unavailable in this Android build because the native Pixels BLE bridge is not implemented yet.'
 
   const recentHistory = useMemo(
     () => rollHistory.slice(0, settings.historyLength),

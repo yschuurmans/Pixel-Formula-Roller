@@ -18,6 +18,7 @@ const SILENT_RECONNECT_UNAVAILABLE_MESSAGE = "Automatic reconnect is unavailable
 
 export const BLE_UNAVAILABLE_MESSAGES = {
   unavailable: 'Bluetooth is unavailable on this build. Run the app on a supported Android device.',
+  nativeBridgeMissing: 'Bluetooth is unavailable in this Android build because the native Pixels BLE bridge is not implemented yet.',
 } as const
 
 export type Unsubscribe = () => void
@@ -37,6 +38,27 @@ type AppStore = Pick<typeof useAppStore, 'getState' | 'setState'>
 type RollResultCallback = (pixelId: string, face: number, dieType: DieType) => void
 type BleCapabilityProbe = {
   bluetooth?: unknown
+}
+type BleRuntimeProbe = {
+  isNativeAndroid: boolean
+  hasNativeBridge: boolean
+}
+
+type CapacitorLike = {
+  getPlatform?: () => string
+  isNativePlatform?: () => boolean
+  isPluginAvailable?: (pluginName: string) => boolean
+}
+
+function getBleRuntimeProbe(): BleRuntimeProbe {
+  const capacitor = (globalThis as typeof globalThis & { Capacitor?: CapacitorLike }).Capacitor
+  const isNativeAndroid = capacitor?.isNativePlatform?.() === true && capacitor.getPlatform?.() === 'android'
+  const hasNativeBridge = isNativeAndroid && capacitor?.isPluginAvailable?.('PixelsBle') === true
+
+  return {
+    isNativeAndroid,
+    hasNativeBridge,
+  }
 }
 
 function mapPixelDieType(dieType: string): DieType | null {
@@ -69,11 +91,27 @@ function toBlinkColor(color?: GlowColor): Color {
   return Color.fromBytes(color.r, color.g, color.b)
 }
 
-export function getBleUnavailableMessage(probe: BleCapabilityProbe = navigator as BleCapabilityProbe): string | null {
-  return hasBleSupport(probe) ? null : BLE_UNAVAILABLE_MESSAGES.unavailable
+export function getBleUnavailableMessage(
+  probe: BleCapabilityProbe = navigator as BleCapabilityProbe,
+  runtime: BleRuntimeProbe = getBleRuntimeProbe(),
+): string | null {
+  if (hasBleSupport(probe, runtime)) {
+    return null
+  }
+
+  return runtime.isNativeAndroid && !runtime.hasNativeBridge
+    ? BLE_UNAVAILABLE_MESSAGES.nativeBridgeMissing
+    : BLE_UNAVAILABLE_MESSAGES.unavailable
 }
 
-export function hasBleSupport(probe: BleCapabilityProbe = navigator as BleCapabilityProbe): boolean {
+export function hasBleSupport(
+  probe: BleCapabilityProbe = navigator as BleCapabilityProbe,
+  runtime: BleRuntimeProbe = getBleRuntimeProbe(),
+): boolean {
+  if (runtime.isNativeAndroid) {
+    return runtime.hasNativeBridge
+  }
+
   return 'bluetooth' in probe && probe.bluetooth !== undefined
 }
 
@@ -113,8 +151,11 @@ export class PixelsService {
     this.store = store
   }
 
-  initializeBleSupport(probe: BleCapabilityProbe = navigator as BleCapabilityProbe): void {
-    this.store.setState({ bleAvailable: hasBleSupport(probe) })
+  initializeBleSupport(
+    probe: BleCapabilityProbe = navigator as BleCapabilityProbe,
+    runtime: BleRuntimeProbe = getBleRuntimeProbe(),
+  ): void {
+    this.store.setState({ bleAvailable: hasBleSupport(probe, runtime) })
   }
 
   async connectDie(): Promise<void> {
