@@ -244,7 +244,7 @@ export default function MainScreen() {
         <header className="mb-6 flex flex-col gap-4 border-2 border-[#8a72a8] bg-[#1a1421] p-4 shadow-[6px_6px_0_0_#0b0810] md:flex-row md:items-center md:justify-between">
           <div>
             <p className="text-[10px] uppercase tracking-[0.25em] text-[#c5b7d8]">Launchpad</p>
-            <h1 className="mt-3 text-lg leading-snug text-[#f7ead4]">Pixel Formula Roller</h1>
+            <h1 className="mt-3 text-lg leading-snug text-[#f7ead4]">Pixels Roller</h1>
           </div>
 
           <div className="flex gap-3">
