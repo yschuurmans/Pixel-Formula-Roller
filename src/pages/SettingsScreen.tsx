@@ -10,6 +10,8 @@ import {
   glowCleanupOrientation,
   reconnectPairedDice,
   stopGlow,
+  startBatteryHighlightCycle,
+  stopBatteryHighlightCycle,
 } from '../services/pixelsService'
 import DieIcon from '../components/DieIcon'
 import type { DieType } from '../types/formula'
@@ -17,10 +19,11 @@ import { useAppStore } from '../stores/useAppStore'
 
 const CLEANUP_DIE_ORDER: DieType[] = ['d4', 'd6', 'd8', 'd10', 'd12', 'd20', 'd100']
 const CLEANUP_RECONNECT_INTERVAL_MS = 2_000
-const CLEANUP_GLOW_INTERVAL_MS = 30_000
+const CLEANUP_GLOW_INTERVAL_MS = 5_000
 const CLEANUP_BASE_GLOW = { r: 40, g: 40, b: 40 } as const
-const CLEANUP_LOW_FACE_GLOW = { r: 255, g: 68, b: 68 } as const
-const CLEANUP_HIGH_FACE_GLOW = { r: 34, g: 255, b: 94 } as const
+// Explicit, semantic names: TOP should be green, BOTTOM should be red.
+const CLEANUP_TOP_FACE_GLOW = { r: 34, g: 255, b: 94 } as const
+const CLEANUP_BOTTOM_FACE_GLOW = { r: 255, g: 68, b: 68 } as const
 
 function displayDieType(dieType: DieType): string {
   return dieType === 'd100' ? 'd%' : dieType
@@ -118,6 +121,36 @@ export default function SettingsScreen() {
     }
   }, [])
 
+  const settings = useAppStore((state) => state.settings)
+  const setSettings = useAppStore((state) => state.setSettings)
+
+  const handleToggleHighlight = (enabled: boolean) => {
+    setSettings({ ...settings, highlightLowBattery: enabled })
+
+    // Turn off any active cleanup when starting highlighting so they cannot
+    // both run at the same time.
+    if (enabled) {
+      setActiveCleanupDieType(null)
+    }
+
+    if (enabled) {
+      if (!pairedPixelIds || pairedPixelIds.length === 0) {
+        setToast('No paired dice to highlight.')
+        if (toastTimeoutRef.current !== null) {
+          window.clearTimeout(toastTimeoutRef.current)
+          toastTimeoutRef.current = null
+        }
+
+        toastTimeoutRef.current = window.setTimeout(() => setToast(null), 6_000)
+        return
+      }
+
+      startBatteryHighlightCycle()
+    } else {
+      stopBatteryHighlightCycle()
+    }
+  }
+
   const stopCleanupGlowForType = async (dieType: DieType) => {
     const pixelIds = Object.values(latestPixelsRef.current)
       .filter((pixel) => pixel.connectionState === 'connected' && pixel.dieType === dieType)
@@ -178,8 +211,10 @@ export default function SettingsScreen() {
   const glowCleanupFacesForPixel = async (pixelId: string) => {
     await glowCleanupOrientation(pixelId, {
       baseColor: CLEANUP_BASE_GLOW,
-      lowFaceColor: CLEANUP_LOW_FACE_GLOW,
-      highFaceColor: CLEANUP_HIGH_FACE_GLOW,
+      // Service expects lowFaceColor/highFaceColor; map semantic top/bottom
+      // into those parameters so top is green and bottom is red.
+      lowFaceColor: CLEANUP_BOTTOM_FACE_GLOW,
+      highFaceColor: CLEANUP_TOP_FACE_GLOW,
     })
   }
 
@@ -206,7 +241,7 @@ export default function SettingsScreen() {
       await connectRememberedDice(missingPixelIds, {
         suppressErrors: true,
         continueOnError: true,
-      })
+      }, 'cleanup-reconnect')
     }
 
     const glowCleanupDice = async () => {
@@ -387,6 +422,40 @@ export default function SettingsScreen() {
 
           <div className="space-y-6">
             <section className="border-2 border-[#8a72a8] bg-[#15111a] p-4 shadow-[6px_6px_0_0_#09070d]">
+              <h2 className="text-sm text-[#f7ead4]">Highlight low battery dice</h2>
+              <p className="mt-2 text-[9px] leading-relaxed text-[#c5b7d8]">
+                Cycle paired dice and indicate battery level with LEDs (red/yellow/green). Dice &gt; 80% are disconnected and not highlighted.
+              </p>
+
+              <div className="mt-4 flex items-center justify-between">
+                <label className="flex items-center gap-3 text-[10px] text-[#f7ead4]">
+                  <span>{settings.highlightLowBattery ? 'On' : 'Off'}</span>
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    aria-label="Highlight low battery dice"
+                    checked={!!settings.highlightLowBattery}
+                    onChange={(e) => handleToggleHighlight(e.target.checked)}
+                    className="h-5 w-5 accent-[#86efac]"
+                  />
+                </label>
+
+                {settings.highlightLowBattery ? (
+                  <div className="text-[10px] text-[#c5b7d8]">
+                    Highlighting: {pairedPixelIds.length} dice — running
+                    <button
+                      type="button"
+                      onClick={() => handleToggleHighlight(false)}
+                      className="ml-2 border-2 border-[#ff8f66] bg-[#3c1d10] px-2 py-1 text-[10px] text-[#ffe2d6]"
+                    >
+                      Stop
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+
+            </section>
+            <section className="border-2 border-[#8a72a8] bg-[#15111a] p-4 shadow-[6px_6px_0_0_#09070d]">
               <h2 className="text-sm text-[#f7ead4]">Cleanup</h2>
               <p className="mt-2 text-[9px] leading-relaxed text-[#c5b7d8]">
                 Enable one die type to keep reconnecting remembered dice of that type and keep them glowing until they disconnect.
@@ -427,7 +496,17 @@ export default function SettingsScreen() {
                             role="switch"
                             aria-label={`${displayDieType(dieType)} cleanup`}
                             checked={isActive}
-                            onChange={() => setActiveCleanupDieType((current) => (current === dieType ? null : dieType))}
+                            disabled={!!settings.highlightLowBattery}
+                            onChange={() => {
+                              const next = activeCleanupDieType === dieType ? null : dieType
+                              // If enabling cleanup while battery highlighting is on,
+                              // turn highlighting off first.
+                              if (next !== null && settings.highlightLowBattery) {
+                                handleToggleHighlight(false)
+                              }
+
+                              setActiveCleanupDieType(next)
+                            }}
                             className="h-5 w-5 accent-[#86efac]"
                           />
                         </label>

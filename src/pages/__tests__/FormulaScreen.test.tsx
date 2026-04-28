@@ -8,6 +8,8 @@ import { useAppStore } from '../../stores/useAppStore'
 const {
   mockConnectRememberedDice,
   mockDisconnectDice,
+  mockConnectRememberedDie,
+  mockDisconnectDie,
   mockGlowDie,
   mockMarkPixelUsed,
   mockOnRollResult,
@@ -15,6 +17,8 @@ const {
 } = vi.hoisted(() => ({
   mockConnectRememberedDice: vi.fn(() => Promise.resolve([true])),
   mockDisconnectDice: vi.fn(() => Promise.resolve()),
+  mockConnectRememberedDie: vi.fn(() => Promise.resolve(true)),
+  mockDisconnectDie: vi.fn(() => Promise.resolve()),
   mockGlowDie: vi.fn(() => Promise.resolve()),
   mockMarkPixelUsed: vi.fn(),
   mockOnRollResult: vi.fn(),
@@ -28,7 +32,9 @@ const scrollIntoViewMock = vi.fn()
 
 vi.mock('../../services/pixelsService', () => ({
   connectRememberedDice: mockConnectRememberedDice,
+  connectRememberedDie: (mockConnectRememberedDie as unknown) as typeof mockConnectRememberedDice,
   disconnectDice: mockDisconnectDice,
+  disconnectDie: (mockDisconnectDie as unknown) as typeof mockDisconnectDice,
   glowDie: mockGlowDie,
   markPixelUsed: mockMarkPixelUsed,
   onRollResult: mockOnRollResult.mockImplementation((callback: typeof rollCallback) => {
@@ -117,7 +123,7 @@ function resetStore() {
   useAppStore.setState({
     savedFormulas: [],
     rollHistory: [],
-    settings: { theme: 'dark' },
+    settings: { theme: 'dark', highlightLowBattery: false },
     pairedPixelIds: [],
     pairedPixels: {},
     bleAvailable: true,
@@ -135,6 +141,8 @@ describe('FormulaScreen', () => {
     mockBlocker.reset.mockReset()
     mockConnectRememberedDice.mockClear()
     mockDisconnectDice.mockClear()
+    mockConnectRememberedDie.mockClear()
+    mockDisconnectDie.mockClear()
     mockGlowDie.mockClear()
     mockMarkPixelUsed.mockClear()
     mockOnRollResult.mockClear()
@@ -664,9 +672,8 @@ describe('FormulaScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Roll' }))
 
     await waitFor(() =>
-      expect(mockConnectRememberedDice).toHaveBeenCalledWith(['pixel-d6-memory'], {
+      expect(mockConnectRememberedDie).toHaveBeenCalledWith('pixel-d6-memory', {
         suppressErrors: true,
-        continueOnError: true,
       }),
     )
     expect(screen.queryByRole('button', { name: 'Submit manual rolls' })).not.toBeInTheDocument()
@@ -716,14 +723,13 @@ describe('FormulaScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add d6' }))
     fireEvent.click(screen.getByRole('button', { name: 'Roll' }))
 
-    await waitFor(() => expect(mockDisconnectDice).toHaveBeenCalledWith(['pixel-d4']))
+    await waitFor(() => expect(mockDisconnectDie).toHaveBeenCalledWith('pixel-d4', 'required-for-roll-disconnect'))
     await waitFor(() =>
-      expect(mockConnectRememberedDice).toHaveBeenCalledWith(['pixel-d6-needed'], {
+      expect(mockConnectRememberedDie).toHaveBeenCalledWith('pixel-d6-needed', {
         suppressErrors: true,
-        continueOnError: true,
       }),
     )
-    expect(mockDisconnectDice).not.toHaveBeenCalledWith(['pixel-d8'])
+    expect(mockDisconnectDie).not.toHaveBeenCalledWith('pixel-d8')
   })
 
   it('keeps the completed result visible until roll again is pressed', async () => {

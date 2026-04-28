@@ -212,6 +212,36 @@ public class PixelsBlePlugin extends Plugin {
         }
     }
 
+    @PluginMethod
+    public void log(PluginCall call) {
+        String message = call.getString("message");
+        String level = call.getString("level", "i");
+        if (message == null) {
+            call.reject("Missing message.");
+            return;
+        }
+
+        switch (level) {
+            case "e":
+                Log.e(TAG, message);
+                break;
+            case "w":
+                Log.w(TAG, message);
+                break;
+            case "d":
+                Log.d(TAG, message);
+                break;
+            case "v":
+                Log.v(TAG, message);
+                break;
+            default:
+                Log.i(TAG, message);
+                break;
+        }
+
+        call.resolve();
+    }
+
     @PermissionCallback
     private void onBlePermissionResult(PluginCall call) {
         if (!hasRuntimePermissions()) {

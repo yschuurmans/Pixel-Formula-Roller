@@ -29,6 +29,7 @@ export interface RollHistoryEntry {
 
 export interface AppSettings {
   theme: 'dark';
+  highlightLowBattery: boolean;
 }
 
 export interface PixelEntry {
@@ -72,10 +73,12 @@ interface AppActions {
   removePixel: (id: string) => void;
   setBleError: (error: string | null) => void;
   clearBleError: () => void;
+  setSettings: (settings: AppSettings) => void;
 }
 
 const defaultSettings: AppSettings = {
   theme: 'dark',
+  highlightLowBattery: false,
 };
 
 function isQuotaExceededError(error: unknown): boolean {
@@ -235,6 +238,7 @@ export const useAppStore = create<AppState & AppActions>()(
         }),
       setBleError: (error) => set({ bleError: error }),
       clearBleError: () => set({ bleError: null }),
+      setSettings: (settings) => set({ settings }),
     }),
     {
       name: 'pixel-formula-roller',
@@ -250,6 +254,8 @@ export const useAppStore = create<AppState & AppActions>()(
           rollHistory: (typedState?.rollHistory ?? []).slice(0, ROLL_HISTORY_STORAGE_LIMIT),
           settings: {
             theme: typedState?.settings?.theme ?? defaultSettings.theme,
+            highlightLowBattery:
+              typedState?.settings?.highlightLowBattery ?? defaultSettings.highlightLowBattery,
           },
           pairedPixelIds: typedState?.pairedPixelIds ?? [],
           pairedPixels: typedState?.pairedPixels ?? {},
@@ -257,14 +263,17 @@ export const useAppStore = create<AppState & AppActions>()(
 
         return normalizedState;
       },
-      partialize: (state) => ({
-        savedFormulas: state.savedFormulas,
-        rollHistory: state.rollHistory,
-        settings: state.settings,
-        pairedPixelIds: state.pairedPixelIds,
-        pairedPixels: state.pairedPixels,
-        // pixels is excluded from persist intentionally
-      }),
+        partialize: (state) => ({
+          savedFormulas: state.savedFormulas,
+          rollHistory: state.rollHistory,
+          // Do NOT persist the `highlightLowBattery` flag so the battery
+          // highlighting does not survive app restart. Always persist the
+          // theme only.
+          settings: { theme: state.settings.theme, highlightLowBattery: false },
+          pairedPixelIds: state.pairedPixelIds,
+          pairedPixels: state.pairedPixels,
+          // pixels is excluded from persist intentionally
+        }),
     }
   )
 );

@@ -28,7 +28,7 @@ describe('useAppStore persistence', () => {
     useAppStore.setState({
       savedFormulas: [],
       rollHistory: [],
-      settings: { theme: 'dark' },
+      settings: { theme: 'dark', highlightLowBattery: false },
       pairedPixelIds: [],
       bleAvailable: true,
       bleError: null,
@@ -77,7 +77,7 @@ describe('useAppStore persistence', () => {
       1,
     )
 
-    expect(migrated?.settings).toEqual({ theme: 'dark' })
+    expect(migrated?.settings).toEqual({ theme: 'dark', highlightLowBattery: false })
     expect(migrated?.pairedPixelIds).toEqual(['pixel-1'])
   })
 })

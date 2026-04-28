@@ -9,6 +9,13 @@
 			"cwd": "${workspaceFolder}"
 		},
 		{
+			"name": "Android: Full deploy to SAMSUNG",
+			"type": "node-terminal",
+			"request": "launch",
+			"command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\scripts\\android-phone-deploy.ps1\" -Mode full-deploy -DeviceId \"RFCWA1BTTRD\"",
+			"cwd": "${workspaceFolder}"
+		},
+		{
 			"name": "Android: Full deploy to phone",
 			"type": "node-terminal",
 			"request": "launch",

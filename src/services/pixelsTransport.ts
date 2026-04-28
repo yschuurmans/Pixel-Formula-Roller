@@ -43,6 +43,7 @@ type NativeBlePlugin = {
   connect(options: { systemId: string; timeoutMs?: number }): Promise<NativePixelDevice>
   disconnect(options: { systemId: string }): Promise<void>
   writeValue(options: { systemId: string; value: number[]; withoutResponse?: boolean }): Promise<void>
+  log(options: { message: string; level?: 'i' | 'w' | 'e' | 'd' | 'v' }): Promise<void>
   addListener(
     eventName: 'pixelsBleNotification',
     listenerFunc: (event: NativeBleNotificationEvent) => void,
@@ -66,6 +67,37 @@ export type PixelsBleAvailability = NativeBleAvailability & {
 const NativePixelsBle = registerPlugin<NativeBlePlugin>('PixelsBle')
 const nativePixels = new Map<string, Pixel>()
 const nativeKnownDevices = new Map<string, NativePixelDevice>()
+
+type LogLevel = 'i' | 'w' | 'e' | 'd' | 'v'
+
+export function nativeLog(level: LogLevel, ...args: unknown[]) {
+  // Format message
+  const message = args
+    .map((a) => {
+      if (typeof a === 'string') return a
+      try {
+        return JSON.stringify(a)
+      } catch {
+        return String(a)
+      }
+    })
+    .join(' ')
+
+  // Mirror to console for browser/dev tooling
+  if (level === 'e') console.error('[PixelsBle]', message)
+  else if (level === 'w') console.warn('[PixelsBle]', message)
+  else if (level === 'd') console.debug?.('[PixelsBle]', message)
+  else console.info('[PixelsBle]', message)
+
+  // Forward to native plugin when available so logs appear under the PixelsBle tag in logcat
+  if (isNativeBridgeAvailable()) {
+    try {
+      ;(NativePixelsBle as any).log?.({ message, level })
+    } catch {
+      // best-effort
+    }
+  }
+}
 
 function isNativeAndroidRuntime(): boolean {
   return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android'
@@ -104,6 +136,7 @@ class NativePixelsSession extends PixelSession {
 
     this.disconnectHandlePromise = NativePixelsBle.addListener('pixelsBleDisconnect', (event) => {
       if (event.systemId === this.systemId) {
+        nativeLog('i', 'Native pixelsBleDisconnect for', this.systemId, event)
         this._notifyConnectionEvent('disconnected')
       }
     }).then((handle) => {
@@ -133,9 +166,11 @@ class NativePixelsSession extends PixelSession {
       if (device.name && !this.pixelName) {
         this._setName(device.name)
       }
+      nativeLog('i', 'Native connect succeeded for', this.systemId, device)
       this._notifyConnectionEvent('connected')
       this._notifyConnectionEvent('ready')
     } catch (error) {
+      nativeLog('w', 'Native connect failed for', this.systemId, error)
       this._notifyConnectionEvent('disconnected')
       throw normalizeNativeError(error)
     }
@@ -144,7 +179,12 @@ class NativePixelsSession extends PixelSession {
   async disconnect(): Promise<void> {
     this._notifyConnectionEvent('disconnecting')
     try {
+      nativeLog('i', 'Native disconnect requested for', this.systemId)
       await NativePixelsBle.disconnect({ systemId: this.systemId })
+      nativeLog('i', 'Native disconnect completed for', this.systemId)
+    } catch (error) {
+      nativeLog('w', 'Native disconnect error for', this.systemId, error)
+      throw normalizeNativeError(error)
     } finally {
       this._notifyConnectionEvent('disconnected')
     }

@@ -67,7 +67,7 @@ function resetStore() {
   useAppStore.setState({
     savedFormulas: [],
     rollHistory: [],
-    settings: { theme: 'dark' },
+    settings: { theme: 'dark', highlightLowBattery: false },
     pairedPixelIds: [],
     pairedPixels: {},
     bleAvailable: true,
@@ -244,14 +244,18 @@ describe('SettingsScreen', () => {
 
     expect(d6Toggle).toBeChecked()
     expect(d20Toggle).not.toBeChecked()
-    expect(connectRememberedDiceMock).toHaveBeenCalledWith(['pixel-d6-a'], {
-      suppressErrors: true,
-      continueOnError: true,
-    })
+    expect(connectRememberedDiceMock).toHaveBeenCalledWith(
+      ['pixel-d6-a'],
+      {
+        suppressErrors: true,
+        continueOnError: true,
+      },
+      'cleanup-reconnect',
+    )
     expect(glowCleanupOrientationMock).toHaveBeenCalledWith('pixel-d6-live', {
-      baseColor: { r: 48, g: 48, b: 48 },
-      lowFaceColor: { r: 239, g: 68, b: 68 },
-      highFaceColor: { r: 34, g: 197, b: 94 },
+      baseColor: { r: 40, g: 40, b: 40 },
+      lowFaceColor: { r: 255, g: 68, b: 68 },
+      highFaceColor: { r: 34, g: 255, b: 94 },
     })
 
     await act(async () => {
@@ -294,9 +298,9 @@ describe('SettingsScreen', () => {
 
     expect(connectRememberedDiceMock).toHaveBeenCalledTimes(1)
     expect(glowCleanupOrientationMock).toHaveBeenCalledWith('pixel-d6-live', {
-      baseColor: { r: 48, g: 48, b: 48 },
-      lowFaceColor: { r: 239, g: 68, b: 68 },
-      highFaceColor: { r: 34, g: 197, b: 94 },
+      baseColor: { r: 40, g: 40, b: 40 },
+      lowFaceColor: { r: 255, g: 68, b: 68 },
+      highFaceColor: { r: 34, g: 255, b: 94 },
     })
 
     connectRememberedDiceMock.mockClear()
@@ -307,9 +311,9 @@ describe('SettingsScreen', () => {
     })
 
     expect(glowCleanupOrientationMock).toHaveBeenCalledWith('pixel-d6-live', {
-      baseColor: { r: 48, g: 48, b: 48 },
-      lowFaceColor: { r: 239, g: 68, b: 68 },
-      highFaceColor: { r: 34, g: 197, b: 94 },
+      baseColor: { r: 40, g: 40, b: 40 },
+      lowFaceColor: { r: 255, g: 68, b: 68 },
+      highFaceColor: { r: 34, g: 255, b: 94 },
     })
     expect(connectRememberedDiceMock).toHaveBeenCalledTimes(15)
 
@@ -350,9 +354,9 @@ describe('SettingsScreen', () => {
     })
 
     expect(glowCleanupOrientationMock).toHaveBeenCalledWith('pixel-d20-a', {
-      baseColor: { r: 48, g: 48, b: 48 },
-      lowFaceColor: { r: 239, g: 68, b: 68 },
-      highFaceColor: { r: 34, g: 197, b: 94 },
+      baseColor: { r: 40, g: 40, b: 40 },
+      lowFaceColor: { r: 255, g: 68, b: 68 },
+      highFaceColor: { r: 34, g: 255, b: 94 },
     })
   })
 })

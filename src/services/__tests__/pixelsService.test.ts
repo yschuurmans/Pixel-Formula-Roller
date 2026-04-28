@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { PixelsService, getBleUnavailableMessage } from '../pixelsService'
+import { PixelsService, getBleUnavailableMessage, batteryToHighlightAction } from '../pixelsService'
+import { DiceUtils, getFaceMask } from '@systemic-games/pixels-core-animation'
 import { useAppStore } from '../../stores/useAppStore'
 
 const {
@@ -495,5 +496,91 @@ describe('pixelsService', () => {
     expect(pixel.disconnect).toHaveBeenCalledTimes(1)
     expect(useAppStore.getState().pairedPixelIds).toEqual([])
     expect(useAppStore.getState().pixels['pixel-5']).toBeUndefined()
+  })
+
+  it('normalizes die types and targets correct face masks for d10 and d00', async () => {
+    const service = new PixelsService(useAppStore)
+
+    const d10Pixel = new FakePixel({ systemId: 'pixel-d10', dieType: 'd10' })
+    const d00Pixel = new FakePixel({ systemId: 'pixel-d00', dieType: 'd00' })
+    const d6Pixel = new FakePixel({ systemId: 'pixel-d6', dieType: 'd6' })
+
+    const d10DataSet = (service as any).createCleanupAnimationDataSet(d10Pixel, {})
+    const d00DataSet = (service as any).createCleanupAnimationDataSet(d00Pixel, {})
+    const d6DataSet = (service as any).createCleanupAnimationDataSet(d6Pixel, {})
+
+    expect(d10DataSet).not.toBeNull()
+    expect(d00DataSet).not.toBeNull()
+    expect(d6DataSet).not.toBeNull()
+
+    const d10Faces = DiceUtils.getDieFaces('d10')
+    const d10LowestMask = getFaceMask(Math.min(...d10Faces), 'd10')
+    const d10HighestMask = getFaceMask(Math.max(...d10Faces), 'd10')
+    expect(d10DataSet.animations[1].faceMask).toBe(d10LowestMask)
+    expect(d10DataSet.animations[2].faceMask).toBe(d10HighestMask)
+    // Ensure the color tracks map correctly: base=0, low=1, high=2
+    expect(d10DataSet.animations[1].gradientTrackOffset).toBe(1)
+    expect(d10DataSet.animations[2].gradientTrackOffset).toBe(2)
+
+    const d00Faces = DiceUtils.getDieFaces('d00')
+    const d00LowestMask = getFaceMask(Math.min(...d00Faces), 'd00')
+    const d00HighestMask = getFaceMask(Math.max(...d00Faces), 'd00')
+    expect(d00DataSet.animations[1].faceMask).toBe(d00LowestMask)
+    expect(d00DataSet.animations[2].faceMask).toBe(d00HighestMask)
+    expect(d00DataSet.animations[1].gradientTrackOffset).toBe(1)
+    expect(d00DataSet.animations[2].gradientTrackOffset).toBe(2)
+
+    const d6Faces = DiceUtils.getDieFaces('d6')
+    const d6LowestMask = getFaceMask(Math.min(...d6Faces), 'd6')
+    const d6HighestMask = getFaceMask(Math.max(...d6Faces), 'd6')
+    expect(d6DataSet.animations[1].faceMask).toBe(d6LowestMask)
+    expect(d6DataSet.animations[2].faceMask).toBe(d6HighestMask)
+    expect(d6DataSet.animations[1].gradientTrackOffset).toBe(1)
+    expect(d6DataSet.animations[2].gradientTrackOffset).toBe(2)
+  })
+})
+
+describe('batteryToHighlightAction', () => {
+  it('maps battery percent boundaries to actions', () => {
+    expect(batteryToHighlightAction(81)).toEqual({ action: 'disconnect' })
+    expect(batteryToHighlightAction(80)).toEqual({ action: 'glow', color: 'green' })
+    expect(batteryToHighlightAction(61)).toEqual({ action: 'glow', color: 'green' })
+    expect(batteryToHighlightAction(60)).toEqual({ action: 'glow', color: 'yellow' })
+    expect(batteryToHighlightAction(41)).toEqual({ action: 'glow', color: 'yellow' })
+    expect(batteryToHighlightAction(40)).toEqual({ action: 'glow', color: 'red' })
+    expect(batteryToHighlightAction(0)).toEqual({ action: 'glow', color: 'red' })
+  })
+})
+
+describe('startBatteryHighlightCycle', () => {
+  it('issues expected commands for a sample set of battery values (single run)', async () => {
+    vi.useFakeTimers()
+
+    const service = new PixelsService(useAppStore)
+
+    useAppStore.setState({
+      pairedPixelIds: ['pixel-a', 'pixel-b', 'pixel-c'],
+      pixels: {
+        'pixel-a': { pixelId: 'pixel-a', dieType: 'd6', connectionState: 'connected', batteryLevel: 85, lastFace: null },
+        'pixel-b': { pixelId: 'pixel-b', dieType: 'd6', connectionState: 'connected', batteryLevel: 75, lastFace: null },
+        'pixel-c': { pixelId: 'pixel-c', dieType: 'd6', connectionState: 'connected', batteryLevel: 35, lastFace: null },
+      },
+    })
+
+    const disconnectSpy = vi.spyOn(service, 'disconnectDie').mockImplementation(async () => undefined)
+    // Spy the internal permanent animation call used by the cycle
+    const glowSpy = vi.spyOn(service as any, 'glowSolidColor').mockImplementation(async () => undefined)
+
+    service.startBatteryHighlightCycle({ holdMs: 10, singleRun: true })
+
+    // Let the cycle run
+    await vi.advanceTimersByTimeAsync(200)
+
+    expect(disconnectSpy).toHaveBeenCalledWith('pixel-a', 'battery-full-disconnect')
+    expect(glowSpy).toHaveBeenCalledWith('pixel-b', expect.any(Object), expect.any(Number))
+    expect(glowSpy).toHaveBeenCalledWith('pixel-c', expect.any(Object), expect.any(Number))
+
+    disconnectSpy.mockRestore()
+    glowSpy.mockRestore()
   })
 })

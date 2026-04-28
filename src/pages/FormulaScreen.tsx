@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Navigate, useBlocker, useLocation, useNavigate, useParams, type BlockerFunction } from 'react-router-dom'
 import { evaluateFormula, extractRequiredDice, formulaToPickerState, parseFormula } from '../services/formulaParser'
-import { connectRememberedDice, disconnectDice, glowDie, markPixelUsed, onRollResult, stopAllGlows } from '../services/pixelsService'
+import {
+  connectRememberedDie,
+  disconnectDie,
+  glowDie,
+  markPixelUsed,
+  onRollResult,
+  stopAllGlows,
+} from '../services/pixelsService'
 import { useAppStore, type RememberedPixelEntry } from '../stores/useAppStore'
 import type { DieRollResult, DieType, EvaluationResult, ParsedFormula } from '../types/formula'
 import DieIcon from '../components/DieIcon'
@@ -681,56 +688,62 @@ function buildAvailabilityPlan(
   }
 
   const rememberedByDieType = getRememberedPixelsByDieType(rememberedPixels)
-  const connectIds: string[] = []
+  const connectCandidates: string[] = []
 
   for (const dieType of DIE_ORDER) {
     const pendingCount = pendingCounts.get(dieType) ?? 0
-    if (pendingCount === 0) {
-      continue
-    }
+    if (pendingCount === 0) continue
 
     const currentlyConnected = connectedCounts.get(dieType) ?? 0
     const missingCount = Math.max(0, pendingCount - currentlyConnected)
-    if (missingCount === 0) {
-      continue
-    }
+    if (missingCount === 0) continue
 
     const availableRemembered = (rememberedByDieType.get(dieType) ?? []).filter(
       (pixel) => !connectedPixelIds.has(pixel.pixelId),
     )
 
     for (const rememberedPixel of availableRemembered.slice(0, missingCount)) {
-      connectIds.push(rememberedPixel.pixelId)
+      connectCandidates.push(rememberedPixel.pixelId)
     }
   }
 
-  if (connectIds.length === 0) {
+  if (connectCandidates.length === 0) {
     return { disconnectIds: [], connectIds: [] }
   }
 
-  const remainingConnectedCounts = new Map(connectedCounts)
-  const connectedByAge = [...connectedPixels].sort(
-    (left, right) => (rememberedPixels[left.pixelId]?.lastUsedAt ?? 0) - (rememberedPixels[right.pixelId]?.lastUsedAt ?? 0),
+  // Compute how many connected dice we may safely disconnect per die type
+  const allowedDisconnect = new Map<DieType, number>()
+  for (const [dieType, connectedCount] of connectedCounts) {
+    const pending = pendingCounts.get(dieType) ?? 0
+    allowedDisconnect.set(dieType, Math.max(0, connectedCount - pending))
+  }
+
+  // Do not consider pixels that are already assigned to slots for disconnection
+  const assignedPixelIds = new Set<string>(
+    slots.map((s) => s.pixelId).filter((id): id is string => id !== null),
   )
+
+  const connectedByAge = [...connectedPixels]
+    .filter((p) => !assignedPixelIds.has(p.pixelId))
+    .sort(
+      (left, right) => (rememberedPixels[left.pixelId]?.lastUsedAt ?? 0) - (rememberedPixels[right.pixelId]?.lastUsedAt ?? 0),
+    )
+
   const disconnectIds: string[] = []
 
   for (const pixel of connectedByAge) {
-    const connectedCount = remainingConnectedCounts.get(pixel.dieType) ?? 0
-    const retainCount = Math.min(pendingCounts.get(pixel.dieType) ?? 0, connectedCounts.get(pixel.dieType) ?? 0)
-
-    if (connectedCount <= retainCount) {
-      continue
-    }
+    const allowed = allowedDisconnect.get(pixel.dieType) ?? 0
+    if (allowed <= 0) continue
 
     disconnectIds.push(pixel.pixelId)
-    remainingConnectedCounts.set(pixel.dieType, connectedCount - 1)
+    allowedDisconnect.set(pixel.dieType, allowed - 1)
 
-    if (disconnectIds.length === connectIds.length) {
-      break
-    }
+    if (disconnectIds.length === connectCandidates.length) break
   }
 
-  return { disconnectIds, connectIds }
+  // Return the full list of candidates to connect; disconnectIds may be empty
+  // (disconnects are only performed where needed/available).
+  return { disconnectIds, connectIds: connectCandidates }
 }
 
 function hasRecoverableRememberedPixel(
@@ -1510,29 +1523,43 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
           return
         }
 
-        await disconnectDice(plan.disconnectIds)
-
-        if (!cancelled) {
-          await connectRememberedDice(plan.connectIds, {
-            suppressErrors: true,
-            continueOnError: true,
-          })
-        }
-
-        const pendingGlowPixelIds = getPendingGlowPixelIds(rollSession, connectedPixels)
-        if (!cancelled && pendingGlowPixelIds.length > 0) {
-          scheduleGlowPrompt(pendingGlowPixelIds)
-        }
-
-        if (!cancelled) {
-          setRollSession((current) =>
-            current && current.result === null
-              ? {
-                  ...current,
-                  statusMessage: 'Trying to reconnect remembered dice...',
-                }
-              : current,
+        // 1) Disconnect all requested dice in parallel so the radio resource
+        //    can be released quickly for reconnect attempts.
+        if (plan.disconnectIds.length > 0) {
+          await Promise.allSettled(
+            plan.disconnectIds.map((id) => disconnectDie(id, 'required-for-roll-disconnect')),
           )
+        }
+
+        if (!cancelled) {
+          // 2) Reconnect all remembered dice in parallel (best-effort).
+          if (plan.connectIds.length > 0) {
+            await Promise.allSettled(
+              plan.connectIds.map((id) => connectRememberedDie(id, { suppressErrors: true })),
+            )
+          }
+
+          // Recompute connected pixels from the store after attempting reconnects
+          const latestPixels = useAppStore.getState().pixels
+          const latestConnectedPixels: ConnectedPixel[] = Object.values(latestPixels)
+            .filter((p) => p.connectionState === 'connected')
+            .map((p) => ({ pixelId: p.pixelId, dieType: p.dieType }))
+
+          const pendingGlowPixelIds = getPendingGlowPixelIds(rollSession, latestConnectedPixels)
+          if (!cancelled && pendingGlowPixelIds.length > 0) {
+            scheduleGlowPrompt(pendingGlowPixelIds)
+          }
+
+          if (!cancelled) {
+            setRollSession((current) =>
+              current && current.result === null
+                ? {
+                    ...current,
+                    statusMessage: 'Trying to reconnect remembered dice...',
+                  }
+                : current,
+            )
+          }
         }
       } finally {
         availabilitySyncInFlightRef.current = false

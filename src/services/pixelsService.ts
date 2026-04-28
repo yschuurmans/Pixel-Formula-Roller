@@ -18,6 +18,7 @@ import {
   type PixelsBleAvailability,
   type Pixel,
   type PixelStatusEvent,
+  nativeLog,
 } from './pixelsTransport'
 import type { DieType } from '../types/formula'
 import { useAppStore } from '../stores/useAppStore'
@@ -25,9 +26,13 @@ import { useAppStore } from '../stores/useAppStore'
 const ROLL_DEDUP_MS = 300
 const CONNECTED_GLOW_COLOR: GlowColor = { r: 34, g: 197, b: 94 }
 const CLEANUP_BASE_GLOW_COLOR: GlowColor = { r: 48, g: 48, b: 48 }
-const CLEANUP_ANIMATION_DURATION_MS = 60_000
+const CLEANUP_ANIMATION_DURATION_MS = 10_000
 const MULTI_CONNECT_BATCH_SIZE = 6
 const MULTI_CONNECT_BATCH_DELAY_MS = 150
+// const BATTERY_HIGHLIGHT_DEFAULT_HOLD_MS = 20_000 (replaced by permanent mode)
+const BATTERY_HIGHLIGHT_PERMANENT_MS = 24 * 60 * 60 * 1000 // 24 hours, used to approximate "permanent"
+const BATTERY_HIGHLIGHT_YELLOW: GlowColor = { r: 250, g: 204, b: 21 }
+const BATTERY_HIGHLIGHT_RED: GlowColor = { r: 239, g: 68, b: 68 }
 const PERMISSION_DENIED_MESSAGE = "Bluetooth permission denied. Tap 'Connect' to try again."
 const NO_PAIRED_DICE_MESSAGE = 'No paired dice available. Connect a die first.'
 const NO_RECONNECTABLE_DICE_MESSAGE = 'No paired dice were available to reconnect.'
@@ -42,7 +47,6 @@ export const BLE_UNAVAILABLE_MESSAGES = {
 let cachedBleUnavailableMessage: string | null = null
 
 export type Unsubscribe = () => void
-
 export interface ReconnectOptions {
   allowPromptFallback?: boolean
   suppressFailureError?: boolean
@@ -69,6 +73,10 @@ interface GlowOptions {
 
 interface CleanupGlowOptions {
   baseColor?: GlowColor
+  // Semantic option names: prefer `topFaceColor` / `bottomFaceColor`.
+  topFaceColor?: GlowColor
+  bottomFaceColor?: GlowColor
+  // Backwards-compatibility aliases (kept for callers still using old names).
   lowFaceColor?: GlowColor
   highFaceColor?: GlowColor
 }
@@ -200,6 +208,7 @@ export class PixelsService {
   private readonly rollCallbacks = new Set<RollResultCallback>()
   private readonly lastRollAt = new Map<string, number>()
   private readonly cleanupAnimationHashes = new Map<string, number>()
+  private batteryHighlightController: AbortController | null = null
 
   constructor(store: AppStore = useAppStore) {
     this.store = store
@@ -237,7 +246,7 @@ export class PixelsService {
 
     try {
       const pixels = await requestPixels()
-      await this.connectPixelsInBatches(pixels)
+      await this.connectPixelsInBatches(pixels, 'user-initiated-connect')
     } catch (error) {
       this.store.getState().setBleError(toErrorMessage(error))
     }
@@ -270,7 +279,7 @@ export class PixelsService {
       if (allowPromptFallback && !capabilities.persistentPermissions) {
         try {
           const pixels = await requestPixels()
-          await this.connectPixelsInBatches(pixels)
+          await this.connectPixelsInBatches(pixels, 'reconnect-fallback-picker')
           return
         } catch (error) {
           if (!suppressFailureError) {
@@ -290,25 +299,28 @@ export class PixelsService {
     }
   }
 
-  async disconnectDie(pixelId: string): Promise<void> {
+  async disconnectDie(pixelId: string, reason?: string): Promise<void> {
     const pixel = this.pixels.get(pixelId)
 
     try {
+      nativeLog('i', 'PixelsService.disconnectDie requested for', pixelId, { reason })
       await pixel?.disconnect()
+      nativeLog('i', 'PixelsService.disconnectDie completed for', pixelId, { reason })
     } catch {
       // Disconnect should leave the local service state clean even if the SDK throws.
+      nativeLog('w', 'PixelsService.disconnectDie error for', pixelId, { reason })
     } finally {
       this.cleanupPixel(pixelId)
       this.store.getState().updatePixelState(pixelId, { connectionState: 'disconnected' })
     }
   }
 
-  async disconnectDice(pixelIds: string[]): Promise<void> {
-    await this.runInBatches(pixelIds, (pixelId) => this.disconnectDie(pixelId))
+  async disconnectDice(pixelIds: string[], reason?: string): Promise<void> {
+    await this.runInBatches(pixelIds, (pixelId) => this.disconnectDie(pixelId, reason))
   }
 
   async forgetDie(pixelId: string): Promise<void> {
-    await this.disconnectDie(pixelId)
+    await this.disconnectDie(pixelId, 'forget-die')
     this.store.getState().forgetPairedPixelId(pixelId)
     this.store.getState().removePixel(pixelId)
   }
@@ -320,7 +332,7 @@ export class PixelsService {
         return false
       }
 
-      return await this.connectRegisteredPixel(pixel)
+      return await this.connectRegisteredPixel(pixel, 'reconnect-remembered')
     } catch (error) {
       if (!options.suppressErrors) {
         this.store.getState().setBleError(toErrorMessage(error))
@@ -333,6 +345,7 @@ export class PixelsService {
   async connectRememberedDice(
     pixelIds: string[],
     options: ConnectRememberedDiceOptions = {},
+    reason?: string,
   ): Promise<boolean[]> {
     return this.runInBatches(pixelIds, async (pixelId) => {
       try {
@@ -341,7 +354,7 @@ export class PixelsService {
           return false
         }
 
-        return await this.connectRegisteredPixel(pixel)
+        return await this.connectRegisteredPixel(pixel, reason ?? 'reconnect-remembered-batch')
       } catch (error) {
         if (!options.suppressErrors) {
           this.store.getState().setBleError(toErrorMessage(error))
@@ -444,27 +457,221 @@ export class PixelsService {
     )
   }
 
+  public startBatteryHighlightCycle(options?: { holdMs?: number; singleRun?: boolean; refreshMs?: number }) {
+    const singleRun = !!options?.singleRun
+    const pauseMs = 5000 // wait 5s between cycles as requested
+
+    if (this.batteryHighlightController) {
+      return {
+        stop: () => {
+          this.batteryHighlightController?.abort()
+          void this.stopAllGlows()
+        },
+      }
+    }
+
+    const controller = new AbortController()
+    this.batteryHighlightController = controller
+
+    const runCycle = async () => {
+      try {
+        while (!controller.signal.aborted) {
+          const pairedIds = this.store.getState().pairedPixelIds
+          if (!pairedIds || pairedIds.length === 0) {
+            return
+          }
+
+          // Track which dice we've connected/seen in this cycle so we don't re-check them
+          const seenThisCycle = new Set<string>()
+
+          // 1) Attempt to connect any die not currently connected in parallel (batched)
+          const toEnsureConnected = pairedIds.filter((id) => !this.pixels.has(id))
+          if (toEnsureConnected.length > 0) {
+            try {
+              await this.connectRememberedDice(toEnsureConnected, { suppressErrors: true, continueOnError: true }, 'battery-highlight-ensure-connected')
+            } catch {
+              // best-effort
+            }
+          }
+
+          // 2) Read battery for all paired dice and collect actions in parallel
+          const readPromises = pairedIds.map(async (pixelId) => {
+            if (controller.signal.aborted) return null
+
+            // mark as seen (we attempted to read it)
+            seenThisCycle.add(pixelId)
+
+            // Prefer persisted store value, fall back to SDK value
+            let battery = this.store.getState().pixels[pixelId]?.batteryLevel
+            const sdkPixel = this.pixels.get(pixelId)
+            if ((battery === null || battery === undefined) && sdkPixel && Number.isFinite((sdkPixel as any).batteryLevel)) {
+              battery = (sdkPixel as any).batteryLevel
+            }
+
+            // If still unknown, wait briefly for an update (up to 1500ms)
+            if (battery === null || battery === undefined) {
+              const deadline = Date.now() + 1500
+              while (!controller.signal.aborted && Date.now() < deadline) {
+                await delay(150)
+                battery = this.store.getState().pixels[pixelId]?.batteryLevel
+                const sdkPixelNow = this.pixels.get(pixelId)
+                if ((battery === null || battery === undefined) && sdkPixelNow && Number.isFinite((sdkPixelNow as any).batteryLevel)) {
+                  battery = (sdkPixelNow as any).batteryLevel
+                }
+                if (battery !== null && battery !== undefined) break
+              }
+            }
+
+            return { pixelId, battery }
+          })
+
+          const readResults = await Promise.all(readPromises)
+
+          const toDisconnect: string[] = []
+          const toGlow: Array<{ pixelId: string; color: GlowColor }> = []
+
+          for (const result of readResults) {
+            if (!result) continue
+            const { pixelId, battery } = result
+            if (battery === null || battery === undefined) continue
+
+            if (battery > 80) {
+              toDisconnect.push(pixelId)
+              continue
+            }
+
+            const action = batteryToHighlightAction(battery)
+            const glowColor =
+              action.color === 'green'
+                ? CONNECTED_GLOW_COLOR
+                : action.color === 'yellow'
+                ? BATTERY_HIGHLIGHT_YELLOW
+                : BATTERY_HIGHLIGHT_RED
+
+            toGlow.push({ pixelId, color: glowColor })
+          }
+
+          // 3) Disconnect any fully-charged dice in parallel
+          if (toDisconnect.length > 0) {
+            try {
+              await this.disconnectDice(toDisconnect, 'battery-full-disconnect')
+            } catch {}
+          }
+
+          // 4) Highlight all remaining dice simultaneously for holdMs (20s requested by user)
+          if (toGlow.length > 0) {
+            // Play a long-running instant animation on each die so the glow
+            // remains until explicitly stopped (approximate "permanent").
+            const permanentPromises = toGlow.map((t) =>
+              this.glowSolidColor(t.pixelId, t.color, BATTERY_HIGHLIGHT_PERMANENT_MS),
+            )
+            await Promise.allSettled(permanentPromises)
+          }
+
+          // 5) Wait pauseMs before next cycle
+          if (singleRun) {
+            break
+          }
+
+          const waitUntil = Date.now() + pauseMs
+          while (!controller.signal.aborted && Date.now() < waitUntil) {
+            // sleep in small increments so we can abort quickly
+            await delay(200)
+          }
+        }
+      } finally {
+        this.batteryHighlightController = null
+      }
+    }
+
+    void runCycle()
+
+    return {
+      stop: () => {
+        controller.abort()
+        void this.stopAllGlows()
+      },
+    }
+  }
+
+  public stopBatteryHighlightCycle(): Promise<void> | void {
+    if (!this.batteryHighlightController) {
+      return
+    }
+
+    this.batteryHighlightController.abort()
+    this.batteryHighlightController = null
+    return this.stopAllGlows()
+  }
+
+  private async glowSolidColor(pixelId: string, color: GlowColor, durationMs: number): Promise<void> {
+    const pixel = this.pixels.get(pixelId)
+    if (!pixel) {
+      return
+    }
+
+    const dataSet = new DataSet()
+    const trackIndex = this.pushColorKeyframeTrack(dataSet, color)
+
+    const animation = new AnimationGradient()
+    animation.duration = durationMs
+    animation.faceMask = AnimConstants.faceMaskAll
+    animation.gradientTrackOffset = trackIndex
+
+    dataSet.animations.push(animation)
+
+    try {
+      await pixel.transferInstantAnimations(dataSet)
+      await pixel.playInstantAnimation(0)
+    } catch {
+      // Ignore SDK errors for highlight best-effort
+    }
+  }
+
   private async blinkPixel(pixel: Pixel, options: GlowOptions = {}): Promise<void> {
     const blinkOptions = options.faceMask === undefined ? undefined : { faceMask: options.faceMask }
     await pixel.blink(toBlinkColor(options.color), blinkOptions)
   }
 
   private createCleanupAnimationDataSet(pixel: Pixel, options: CleanupGlowOptions): DataSet | null {
-    const lowestFaceMask = this.getFaceMaskForPixel(pixel, DiceUtils.getLowestFace(pixel.dieType))
-    const highestFaceMask = this.getFaceMaskForPixel(pixel, DiceUtils.getHighestFace(pixel.dieType))
+    // Compute the numeric lowest/highest face values for the die type and
+    // map those to face masks. This uses the SDK's `getDieFaces` which
+    // returns the human-facing face values (e.g. d6 -> [1..6], d10 -> [0..9],
+    // d00 -> [0,10,20,..,90]). Using these concrete values avoids the
+    // special-case behavior of getLowestFace/getHighestFace and fixes
+    // inconsistent mappings across die types.
+    const dieFaces = DiceUtils.getDieFaces(pixel.dieType as any)
+    if (!dieFaces || dieFaces.length === 0) {
+      return null
+    }
+
+    const lowestFaceValue = Math.min(...dieFaces)
+    const highestFaceValue = Math.max(...dieFaces)
+
+    const lowestFaceMask = this.getFaceMaskForPixel(pixel, lowestFaceValue)
+    const highestFaceMask = this.getFaceMaskForPixel(pixel, highestFaceValue)
     if (lowestFaceMask === null || highestFaceMask === null) {
       return null
     }
 
     const dataSet = new DataSet()
-    const baseColorIndex = this.pushColorKeyframeTrack(dataSet, options.baseColor ?? CLEANUP_BASE_GLOW_COLOR)
-    const lowFaceColorIndex = this.pushColorKeyframeTrack(dataSet, options.lowFaceColor ?? { r: 239, g: 68, b: 68 })
-    const highFaceColorIndex = this.pushColorKeyframeTrack(dataSet, options.highFaceColor ?? { r: 34, g: 197, b: 94 })
+    const baseColorIndex = this.pushColorKeyframeTrack(
+      dataSet,
+      options.baseColor ?? CLEANUP_BASE_GLOW_COLOR,
+    )
+
+    // Resolve semantic colors with fallbacks for backward compatibility.
+    // Default to semantic top (green) and bottom (red) colors.
+    const bottomColor: GlowColor = options.bottomFaceColor ?? options.lowFaceColor ?? { r: 255, g: 68, b: 68 }
+    const topColor: GlowColor = options.topFaceColor ?? options.highFaceColor ?? { r: 34, g: 255, b: 94 }
+
+    const bottomFaceColorIndex = this.pushColorKeyframeTrack(dataSet, bottomColor)
+    const topFaceColorIndex = this.pushColorKeyframeTrack(dataSet, topColor)
 
     dataSet.animations.push(
       this.createGradientAnimation(AnimConstants.faceMaskAll, baseColorIndex),
-      this.createGradientAnimation(lowestFaceMask, highFaceColorIndex),
-      this.createGradientAnimation(highestFaceMask, lowFaceColorIndex),
+      this.createGradientAnimation(lowestFaceMask, bottomFaceColorIndex),
+      this.createGradientAnimation(highestFaceMask, topFaceColorIndex),
       this.createCombinedCleanupAnimation(),
     )
 
@@ -518,7 +725,7 @@ export class PixelsService {
     }
   }
 
-  private async connectRegisteredPixel(pixel: Pixel): Promise<boolean> {
+  private async connectRegisteredPixel(pixel: Pixel, reason?: string): Promise<boolean> {
     await repeatConnect(pixel)
 
     const dieType = mapPixelDieType(pixel.dieType)
@@ -542,13 +749,20 @@ export class PixelsService {
       lastFace: null,
     })
 
+    nativeLog('i', 'PixelsService.connectRegisteredPixel registered', pixelId, {
+      reason,
+      dieType,
+      batteryLevel: Number.isFinite(pixel.batteryLevel) ? pixel.batteryLevel : null,
+      sdkDieType: pixel.dieType,
+    })
+
     await pixel.blink(toBlinkColor(CONNECTED_GLOW_COLOR)).catch(() => undefined)
 
     return true
   }
 
-  private async connectPixelsInBatches(pixels: Pixel[]): Promise<boolean[]> {
-    return this.runInBatches(pixels, (pixel) => this.connectRegisteredPixel(pixel))
+  private async connectPixelsInBatches(pixels: Pixel[], reason?: string): Promise<boolean[]> {
+    return this.runInBatches(pixels, (pixel) => this.connectRegisteredPixel(pixel, reason))
   }
 
   private async runInBatches<T, TResult>(
@@ -594,6 +808,7 @@ export class PixelsService {
     }
 
     const onStatusChanged = (event: PixelStatusEvent) => {
+      nativeLog('i', '[PixelsService] Pixel statusChanged', pixelId, event)
       const connectionState = event.status === 'disconnected' ? 'disconnected' : 'connected'
       this.store.getState().updatePixelState(pixelId, { connectionState })
 
@@ -614,6 +829,7 @@ export class PixelsService {
   }
 
   private cleanupPixel(pixelId: string): void {
+    nativeLog('i', '[PixelsService] cleanupPixel for', pixelId)
     const cleanups = this.cleanups.get(pixelId)
     if (cleanups) {
       for (const cleanup of cleanups) {
@@ -641,6 +857,26 @@ function normalizeRollFace(dieType: DieType, face: number): number {
   return face
 }
 
+export function batteryToHighlightAction(percent: number): { action: 'disconnect' | 'glow'; color?: 'red' | 'yellow' | 'green' } {
+  if (!Number.isFinite(percent)) {
+    return { action: 'glow', color: 'red' }
+  }
+
+  if (percent > 80) {
+    return { action: 'disconnect' }
+  }
+
+  if (percent > 60) {
+    return { action: 'glow', color: 'green' }
+  }
+
+  if (percent > 40) {
+    return { action: 'glow', color: 'yellow' }
+  }
+
+  return { action: 'glow', color: 'red' }
+}
+
 export const pixelsService = new PixelsService()
 
 export async function initializeBleSupport(): Promise<void> {
@@ -655,12 +891,12 @@ export async function reconnectPairedDice(options?: ReconnectOptions): Promise<v
   await pixelsService.reconnectPairedDice(options)
 }
 
-export async function disconnectDie(pixelId: string): Promise<void> {
-  await pixelsService.disconnectDie(pixelId)
+export async function disconnectDie(pixelId: string, reason?: string): Promise<void> {
+  await pixelsService.disconnectDie(pixelId, reason)
 }
 
-export async function disconnectDice(pixelIds: string[]): Promise<void> {
-  await pixelsService.disconnectDice(pixelIds)
+export async function disconnectDice(pixelIds: string[], reason?: string): Promise<void> {
+  await pixelsService.disconnectDice(pixelIds, reason)
 }
 
 export async function forgetDie(pixelId: string): Promise<void> {
@@ -677,8 +913,17 @@ export async function connectRememberedDie(
 export async function connectRememberedDice(
   pixelIds: string[],
   options?: ConnectRememberedDiceOptions,
+  reason?: string,
 ): Promise<boolean[]> {
-  return pixelsService.connectRememberedDice(pixelIds, options)
+  return pixelsService.connectRememberedDice(pixelIds, options, reason)
+}
+
+export function startBatteryHighlightCycle(options?: { holdMs?: number; singleRun?: boolean; refreshMs?: number }) {
+  return pixelsService.startBatteryHighlightCycle(options)
+}
+
+export function stopBatteryHighlightCycle() {
+  return pixelsService.stopBatteryHighlightCycle()
 }
 
 export function markPixelUsed(pixelId: string, usedAt?: number): void {
