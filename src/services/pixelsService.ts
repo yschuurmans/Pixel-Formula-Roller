@@ -54,6 +54,7 @@ export interface ReconnectOptions {
 
 export interface ConnectRememberedDieOptions {
   suppressErrors?: boolean
+  singleAttempt?: boolean
 }
 
 export interface ConnectRememberedDiceOptions extends ConnectRememberedDieOptions {
@@ -326,14 +327,22 @@ export class PixelsService {
   }
 
   async connectRememberedDie(pixelId: string, options: ConnectRememberedDieOptions = {}): Promise<boolean> {
+    nativeLog('i', 'PixelsService.connectRememberedDie requested for', pixelId, { options })
     try {
       const pixel = await getPixel(pixelId)
       if (!pixel) {
+        nativeLog('d', 'PixelsService.connectRememberedDie pixel not found', pixelId)
         return false
       }
 
-      return await this.connectRegisteredPixel(pixel, 'reconnect-remembered')
+      const result = await this.connectRegisteredPixel(pixel, 'reconnect-remembered', {
+        singleAttempt: options.singleAttempt,
+        suppressErrors: options.suppressErrors,
+      })
+      nativeLog('i', 'PixelsService.connectRememberedDie result', pixelId, { success: result })
+      return result
     } catch (error) {
+      nativeLog('w', 'PixelsService.connectRememberedDie error', pixelId, error)
       if (!options.suppressErrors) {
         this.store.getState().setBleError(toErrorMessage(error))
       }
@@ -725,8 +734,44 @@ export class PixelsService {
     }
   }
 
-  private async connectRegisteredPixel(pixel: Pixel, reason?: string): Promise<boolean> {
-    await repeatConnect(pixel)
+  private async connectRegisteredPixel(
+    pixel: Pixel,
+    reason?: string,
+    options?: { singleAttempt?: boolean; suppressErrors?: boolean },
+  ): Promise<boolean> {
+    const pixelIdForLog = getPixelId(pixel)
+    nativeLog('i', 'PixelsService.connectRegisteredPixel start', pixelIdForLog, { reason, options })
+    if (options?.singleAttempt) {
+      try {
+        // Try a single connect attempt; fall back to repeatConnect if the
+        // Pixel implementation does not expose a direct `connect` method.
+        if (typeof (pixel as any).connect === 'function') {
+          nativeLog('d', 'connectRegisteredPixel using Pixel.connect', pixelIdForLog)
+          await (pixel as any).connect(6000)
+        } else {
+          nativeLog('d', 'connectRegisteredPixel using repeatConnect', pixelIdForLog)
+          await repeatConnect(pixel)
+        }
+      } catch (error) {
+        nativeLog('w', 'connectRegisteredPixel singleAttempt failed', pixelIdForLog, error)
+        // For singleAttempt we treat failures as non-fatal for the overall
+        // app flow; propagate error to caller by returning false but avoid
+        // surfacing a user-visible error unless explicitly allowed.
+        try {
+          nativeLog('d', 'connectRegisteredPixel attempting disconnect after failed singleAttempt', pixelIdForLog)
+          await pixel.disconnect().catch(() => undefined)
+        } catch {}
+
+        if (!options?.suppressErrors) {
+          this.store.getState().setBleError(toErrorMessage(error))
+        }
+
+        return false
+      }
+    } else {
+      nativeLog('d', 'connectRegisteredPixel using repeatConnect (retrying until success)', pixelIdForLog)
+      await repeatConnect(pixel)
+    }
 
     const dieType = mapPixelDieType(pixel.dieType)
     if (!dieType) {

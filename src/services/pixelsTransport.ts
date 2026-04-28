@@ -119,6 +119,35 @@ function normalizeNativeError(error: unknown): Error {
   return new Error('Bluetooth bridge request failed.')
 }
 
+function serializeNativeError(error: unknown): Record<string, unknown> {
+  try {
+    if (error instanceof Error) {
+      return {
+        message: error.message,
+        name: error.name,
+        stack: (error.stack || '').split('\n').slice(0, 5).join('\n'),
+      }
+    }
+
+    if (typeof error === 'object' && error !== null) {
+      const out: Record<string, unknown> = {}
+      // Copy enumerable properties that are useful (message, code, status)
+      for (const key of Object.keys(error as Record<string, unknown>)) {
+        try {
+          out[key] = (error as Record<string, unknown>)[key]
+        } catch {
+          out[key] = String((error as Record<string, unknown>)[key])
+        }
+      }
+      return out
+    }
+
+    return { value: String(error) }
+  } catch {
+    return { value: 'unable to serialize error' }
+  }
+}
+
 function toUint8Array(data: BufferSource): Uint8Array {
   if (data instanceof ArrayBuffer) {
     return new Uint8Array(data)
@@ -157,10 +186,14 @@ class NativePixelsSession extends PixelSession {
   async connect(timeoutMs = 0): Promise<void> {
     this._notifyConnectionEvent('connecting')
 
+    const attemptId = Date.now()
+    const timeoutToUse = timeoutMs > 0 ? timeoutMs : 6000
+    nativeLog('d', 'NativePixelsSession.connect start', { systemId: this.systemId, timeoutMs: timeoutToUse, attemptId })
+
     try {
       const device = await NativePixelsBle.connect({
         systemId: this.systemId,
-        timeoutMs: timeoutMs > 0 ? timeoutMs : 6000,
+        timeoutMs: timeoutToUse,
       })
       nativeKnownDevices.set(device.systemId, device)
       if (device.name && !this.pixelName) {
@@ -170,7 +203,8 @@ class NativePixelsSession extends PixelSession {
       this._notifyConnectionEvent('connected')
       this._notifyConnectionEvent('ready')
     } catch (error) {
-      nativeLog('w', 'Native connect failed for', this.systemId, error)
+      const serialized = serializeNativeError(error)
+      nativeLog('w', 'Native connect failed structured', { systemId: this.systemId, timeoutMs: timeoutToUse, attemptId, error: serialized })
       this._notifyConnectionEvent('disconnected')
       throw normalizeNativeError(error)
     }
@@ -218,6 +252,7 @@ class NativePixelsSession extends PixelSession {
 function getOrCreateNativePixel(device: NativePixelDevice): Pixel {
   let pixel = nativePixels.get(device.systemId)
   if (!pixel) {
+    nativeLog('d', 'getOrCreateNativePixel creating Pixel for', device.systemId, { name: device.name })
     pixel = new Pixel(new NativePixelsSession(device.systemId, device.name ?? undefined))
     nativePixels.set(device.systemId, pixel)
   }
@@ -275,11 +310,19 @@ export async function getPixel(systemId: string): Promise<Pixel | undefined> {
 
   const pixel = nativePixels.get(systemId)
   if (pixel) {
+    nativeLog('d', 'getPixel returning cached Pixel for', systemId)
     return pixel
   }
 
-  const device = await NativePixelsBle.getPixel({ systemId })
-  return device ? getOrCreateNativePixel(device) : undefined
+  nativeLog('d', 'getPixel native bridge lookup for', systemId)
+  try {
+    const device = await NativePixelsBle.getPixel({ systemId })
+    nativeLog('d', 'getPixel native bridge result', { systemId, found: !!device })
+    return device ? getOrCreateNativePixel(device) : undefined
+  } catch (error) {
+    nativeLog('w', 'getPixel native bridge error', systemId, serializeNativeError(error))
+    return undefined
+  }
 }
 
 export type { PixelStatusEvent }

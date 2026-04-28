@@ -9,6 +9,7 @@ import {
   onRollResult,
   stopAllGlows,
 } from '../services/pixelsService'
+import { nativeLog } from '../services/pixelsTransport'
 import { useAppStore, type RememberedPixelEntry } from '../stores/useAppStore'
 import type { DieRollResult, DieType, EvaluationResult, ParsedFormula } from '../types/formula'
 import DieIcon from '../components/DieIcon'
@@ -16,9 +17,10 @@ import DieResultChip from '../components/DieResultChip'
 
 const DIE_ORDER: DieType[] = ['d4', 'd6', 'd8', 'd10', 'd12', 'd20', 'd100']
 const DISPLAY_DIE_ORDER: DieType[] = [...DIE_ORDER].reverse() as DieType[]
-const FORMULA_ROLL_TRANSITION_DELAY_MS = 900
-const ROLL_GLOW_REPEAT_MS = 5_000
+const FORMULA_ROLL_TRANSITION_DELAY_MS = 1200
+const ROLL_GLOW_REPEAT_MS = 2_000
 const REMEMBERED_DICE_RETRY_INTERVAL_MS = 2_000
+const MAX_CONNECTED = 12
 
 type KeepMode = 'kh' | 'kl'
 
@@ -66,6 +68,7 @@ type RollSession = {
   result: EvaluationResult | null
   statusMessage: string | null
   historyRecorded: boolean
+  sessionId?: string
 }
 
 type ConnectedPixel = {
@@ -517,6 +520,14 @@ function createRollHistoryId(): string {
   return `history-${Date.now()}`
 }
 
+function createRollSessionId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+
+  return `rollsession-${Date.now()}`
+}
+
 function createRollHistoryEntry(
   formulaName: string,
   parsedFormula: ParsedFormula,
@@ -837,6 +848,13 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
   const pendingGlowPromptTimeoutRef = useRef<number | null>(null)
   const queuedGlowPixelIdsRef = useRef<Set<string>>(new Set())
   const availabilitySyncInFlightRef = useRef(false)
+  // Persist initial availability plans for the active roll session so we
+  // don't escalate disconnects across retries.
+  const availabilityInitialDisconnectRef = useRef<string[] | null>(null)
+  const availabilityInitialConnectRef = useRef<string[] | null>(null)
+  const availabilityConnectAttemptedRef = useRef(false)
+  const lastSyncRollSessionRef = useRef<string | null>(null)
+  const pendingReconnectInFlightRef = useRef(false)
   const [glowPauseUntil, setGlowPauseUntil] = useState<number | null>(null)
   const [autoHideRemainingMs, setAutoHideRemainingMs] = useState<number | null>(null)
   const [rollOnlyAutoHideExpired, setRollOnlyAutoHideExpired] = useState(false)
@@ -1218,6 +1236,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       result: null,
       statusMessage: null,
       historyRecorded: false,
+      sessionId: createRollSessionId(),
     }
 
     setManualInputs({})
@@ -1237,19 +1256,70 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     setRollSession(null)
   }
 
+  const attemptPendingReconnects = useCallback(async () => {
+    if (!rollSession || pendingReconnectInFlightRef.current) return
+
+    const storeState = useAppStore.getState()
+    const latestPixels = storeState.pixels
+    const latestPaired = storeState.pairedPixels
+    const latestConnectedPixels: ConnectedPixel[] = Object.values(latestPixels)
+      .filter((p) => p.connectionState === 'connected')
+      .map((p) => ({ pixelId: p.pixelId, dieType: p.dieType }))
+
+    // Prefer the persisted initial connect candidates for this roll session
+    // (these are the only dice we should ever attempt to connect for the
+    // active roll). Fall back to a freshly computed plan if not yet set.
+    let candidates = availabilityInitialConnectRef.current
+    if (!candidates || candidates.length === 0) {
+      const plan = buildAvailabilityPlan(rollSession.slots, latestConnectedPixels, latestPaired)
+      candidates = plan.connectIds.slice()
+      if (availabilityInitialConnectRef.current === null) {
+        availabilityInitialConnectRef.current = candidates.slice()
+        nativeLog('i', 'persisted initial connect candidates (deferred)', {
+          sessionId: rollSession.sessionId,
+          connectCandidates: availabilityInitialConnectRef.current,
+        })
+      }
+    }
+
+    const disconnectedCandidates = candidates.filter((id) => latestPixels[id]?.connectionState !== 'connected')
+    if (disconnectedCandidates.length === 0) return
+
+    pendingReconnectInFlightRef.current = true
+    try {
+      nativeLog('i', 'attempting reconnects for pending candidates', { sessionId: rollSession.sessionId, disconnectedCandidates })
+      await Promise.allSettled(
+        disconnectedCandidates.map((id) => connectRememberedDie(id, { suppressErrors: true, singleAttempt: true })),
+      )
+    } finally {
+      pendingReconnectInFlightRef.current = false
+    }
+  }, [rollSession])
+
   const handlePromptPendingDice = useCallback(async () => {
     if (!rollSession || rollSession.result !== null) {
       return
     }
 
-    const pixelIdsToGlow = getPendingGlowPixelIds(rollSession, connectedPixels)
+    const storeState = useAppStore.getState()
+    const latestConnectedPixels: ConnectedPixel[] = Object.values(storeState.pixels)
+      .filter((p) => p.connectionState === 'connected')
+      .map((p) => ({ pixelId: p.pixelId, dieType: p.dieType }))
+
+    const pixelIdsToGlow = getPendingGlowPixelIds(rollSession, latestConnectedPixels)
     if (pixelIdsToGlow.length === 0) {
       return
     }
 
     clearPendingGlowPrompt()
     await Promise.allSettled(pixelIdsToGlow.map((pixelId) => glowDie(pixelId)))
-  }, [clearPendingGlowPrompt, connectedPixels, rollSession])
+
+    // After completing a blink loop, attempt to reconnect any of the
+    // remembered dice that are known to be needed for this roll session.
+    // Only try the persisted initial candidates (or a freshly computed
+    // plan if none were persisted yet) so we do not connect unrelated dice.
+    void attemptPendingReconnects()
+  }, [clearPendingGlowPrompt, rollSession, attemptPendingReconnects])
 
   const handleManualInputChange = (slotId: string, value: string) => {
     setManualInputs((current) => ({
@@ -1488,6 +1558,16 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       return
     }
 
+    // Reset persisted per-roll-session state when a new roll session is started
+    // (identified by `sessionId`). This prevents slot-level mutations from
+    // resetting the persisted disconnect/connect plan during retries.
+    if (lastSyncRollSessionRef.current !== rollSession.sessionId) {
+      availabilityInitialDisconnectRef.current = null
+      availabilityInitialConnectRef.current = null
+      availabilityConnectAttemptedRef.current = false
+      lastSyncRollSessionRef.current = rollSession.sessionId ?? null
+    }
+
     let cancelled = false
 
     const syncRememberedDice = async () => {
@@ -1498,67 +1578,196 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       availabilitySyncInFlightRef.current = true
 
       try {
-        const plan = buildAvailabilityPlan(rollSession.slots, connectedPixels, pairedPixels)
+        const storeState = useAppStore.getState()
+        const latestPixelsMap = storeState.pixels
+        const latestPaired = storeState.pairedPixels
+        const latestConnectedPixels: ConnectedPixel[] = Object.values(latestPixelsMap)
+          .filter((p) => p.connectionState === 'connected')
+          .map((p) => ({ pixelId: p.pixelId, dieType: p.dieType }))
 
-        if (cancelled) {
-          return
+        const plan = buildAvailabilityPlan(rollSession.slots, latestConnectedPixels, latestPaired)
+        nativeLog('i', 'syncRememberedDice plan', { sessionId: rollSession.sessionId, plan })
+
+        if (cancelled) return
+
+        // Persist the initial connect/disconnect plans for this roll session so we
+        // don't expand the disconnect list across subsequent retries.
+        if (availabilityInitialConnectRef.current === null) {
+          availabilityInitialConnectRef.current = plan.connectIds.slice()
+          nativeLog('i', 'persisted initial connect candidates', {
+            sessionId: rollSession.sessionId,
+            connectCandidates: availabilityInitialConnectRef.current,
+          })
         }
 
-        if (plan.connectIds.length === 0) {
+        if (availabilityInitialDisconnectRef.current === null) {
+          availabilityInitialDisconnectRef.current = plan.disconnectIds.slice()
+          nativeLog('i', 'persisted initial disconnect candidates', {
+            sessionId: rollSession.sessionId,
+            disconnectCandidates: availabilityInitialDisconnectRef.current,
+          })
+        }
+
+        const connectCandidates = availabilityInitialConnectRef.current ?? []
+
+        if (connectCandidates.length === 0) {
           const needsRecovery = rollSession.slots.some(
-            (slot) => slot.face === null && slot.source === 'ble' && !connectedPixels.some((pixel) => pixel.dieType === slot.dieType),
+            (slot) => slot.face === null && slot.source === 'ble' && !latestConnectedPixels.some((pixel) => pixel.dieType === slot.dieType),
           )
+
+          nativeLog('d', 'no connect candidates', {
+            sessionId: rollSession.sessionId,
+            needsRecovery,
+            pendingSlots: rollSession.slots.filter((s) => s.face === null && s.source === 'ble').length,
+          })
 
           if (needsRecovery && !cancelled) {
-            setRollSession((current) =>
-              current && current.result === null
-                ? {
-                    ...current,
-                    statusMessage: 'Trying to reconnect remembered dice...',
-                  }
-                : current,
-            )
+            setRollSession((current) => {
+              if (!current || current.result !== null) return current
+              if (current.statusMessage === 'Trying to reconnect remembered dice...') return current
+              return {
+                ...current,
+                statusMessage: 'Trying to reconnect remembered dice...',
+              }
+            })
           }
 
           return
         }
 
-        // 1) Disconnect all requested dice in parallel so the radio resource
-        //    can be released quickly for reconnect attempts.
-        if (plan.disconnectIds.length > 0) {
-          await Promise.allSettled(
-            plan.disconnectIds.map((id) => disconnectDie(id, 'required-for-roll-disconnect')),
-          )
-        }
+          // Only attempt connects once per roll session — do NOT retry connects.
+        if (!availabilityConnectAttemptedRef.current) {
+          // If connecting the candidates would exceed our MAX_CONNECTED cap,
+          // preemptively disconnect the minimal number of non-assigned, least-recently-used dice.
+          const currentConnectedCount = latestConnectedPixels.length
+          const totalNeeded = connectCandidates.length
 
-        if (!cancelled) {
-          // 2) Reconnect all remembered dice in parallel (best-effort).
-          if (plan.connectIds.length > 0) {
-            await Promise.allSettled(
-              plan.connectIds.map((id) => connectRememberedDie(id, { suppressErrors: true })),
-            )
+          nativeLog('i', 'connect attempt decision', { sessionId: rollSession.sessionId, currentConnectedCount, totalNeeded, MAX_CONNECTED })
+
+          if (currentConnectedCount >= MAX_CONNECTED || currentConnectedCount + totalNeeded > MAX_CONNECTED) {
+            const needToDisconnect = Math.max(0, currentConnectedCount + totalNeeded - MAX_CONNECTED)
+
+              if (needToDisconnect > 0) {
+              // Choose candidates to disconnect: prefer initial disconnect plan,
+              // but ensure we free enough slots (up to `needToDisconnect`) by
+              // selecting additional unassigned connected dice if the initial set
+              // is too small. Persist the expanded set so we don't escalate across
+              // retries.
+
+              const assignedPixelIds = new Set<string>(
+                rollSession.slots.map((s) => s.pixelId).filter((id): id is string => id !== null),
+              )
+
+              const connectedByAge = [...latestConnectedPixels]
+                .filter((p) => !assignedPixelIds.has(p.pixelId))
+                .sort(
+                  (left, right) =>
+                    (latestPaired[left.pixelId]?.lastUsedAt ?? 0) - (latestPaired[right.pixelId]?.lastUsedAt ?? 0),
+                )
+
+              const initialSet = new Set(availabilityInitialDisconnectRef.current ?? [])
+              const prioritized = connectedByAge
+                .filter((p) => initialSet.has(p.pixelId))
+                .map((p) => p.pixelId)
+
+              const availableUnassignedCount = connectedByAge.length
+              const allowedToDisconnect = Math.min(needToDisconnect, availableUnassignedCount)
+
+              let toDisconnectForSpace = prioritized.slice(0, allowedToDisconnect)
+
+              if (toDisconnectForSpace.length < allowedToDisconnect) {
+                const remaining = connectedByAge.map((p) => p.pixelId).filter((id) => !toDisconnectForSpace.includes(id))
+                toDisconnectForSpace = toDisconnectForSpace.concat(remaining.slice(0, allowedToDisconnect - toDisconnectForSpace.length))
+              }
+
+              // Persist the expanded disconnect candidates so retries won't keep
+              // expanding the set.
+              if ((availabilityInitialDisconnectRef.current?.length ?? 0) < toDisconnectForSpace.length) {
+                availabilityInitialDisconnectRef.current = toDisconnectForSpace.slice()
+                nativeLog('i', 'expanded and persisted initial disconnect candidates', {
+                  sessionId: rollSession.sessionId,
+                  disconnectCandidates: availabilityInitialDisconnectRef.current,
+                })
+              }
+
+              if (toDisconnectForSpace.length > 0) {
+                nativeLog('d', 'preemptive disconnect selection', {
+                  sessionId: rollSession.sessionId,
+                  needToDisconnect,
+                  allowedToDisconnect,
+                  toDisconnectForSpace,
+                })
+
+                nativeLog('i', 'performing preemptive disconnects', { sessionId: rollSession.sessionId, toDisconnectForSpace })
+                const disconnectResults = await Promise.allSettled(
+                  toDisconnectForSpace.map((id) => disconnectDie(id, 'required-for-roll-disconnect')),
+                )
+                nativeLog('i', 'preemptive disconnect results', { sessionId: rollSession.sessionId, disconnectResults })
+
+                // Wait briefly to allow the Android BLE stack to free resources
+                // after disconnects before attempting new connects.
+                const pauseMs = 350
+                nativeLog('i', 'pausing after preemptive disconnects', { sessionId: rollSession.sessionId, pauseMs })
+                await new Promise((resolve) => window.setTimeout(resolve, pauseMs))
+
+                nativeLog('d', 'after preemptive disconnect pause', {
+                  sessionId: rollSession.sessionId,
+                  availabilityConnectAttempted: availabilityConnectAttemptedRef.current,
+                  connectCandidates,
+                })
+              }
+            }
           }
 
-          // Recompute connected pixels from the store after attempting reconnects
-          const latestPixels = useAppStore.getState().pixels
-          const latestConnectedPixels: ConnectedPixel[] = Object.values(latestPixels)
-            .filter((p) => p.connectionState === 'connected')
-            .map((p) => ({ pixelId: p.pixelId, dieType: p.dieType }))
+          // Attempt connects exactly once (no retries)
+          nativeLog('d', 'about to mark availabilityConnectAttemptedRef true', {
+            sessionId: rollSession.sessionId,
+            before: availabilityConnectAttemptedRef.current,
+            connectCandidatesLength: connectCandidates.length,
+          })
+          availabilityConnectAttemptedRef.current = true
 
-          const pendingGlowPixelIds = getPendingGlowPixelIds(rollSession, latestConnectedPixels)
-          if (!cancelled && pendingGlowPixelIds.length > 0) {
-            scheduleGlowPrompt(pendingGlowPixelIds)
+          if (!cancelled && connectCandidates.length > 0) {
+            nativeLog('i', 'attempting single-shot connects for candidates', { sessionId: rollSession.sessionId, connectCandidates })
+            const connectResults = await Promise.allSettled(
+              connectCandidates.map((id) => connectRememberedDie(id, { suppressErrors: true, singleAttempt: true })),
+            )
+            nativeLog('i', 'single-shot connect results', { sessionId: rollSession.sessionId, connectResults })
           }
 
           if (!cancelled) {
-            setRollSession((current) =>
-              current && current.result === null
-                ? {
-                    ...current,
-                    statusMessage: 'Trying to reconnect remembered dice...',
-                  }
-                : current,
-            )
+            const latestPixels = useAppStore.getState().pixels
+            const latestConnectedPixels: ConnectedPixel[] = Object.values(latestPixels)
+              .filter((p) => p.connectionState === 'connected')
+              .map((p) => ({ pixelId: p.pixelId, dieType: p.dieType }))
+
+            const pendingGlowPixelIds = getPendingGlowPixelIds(rollSession, latestConnectedPixels)
+            if (!cancelled && pendingGlowPixelIds.length > 0) {
+              scheduleGlowPrompt(pendingGlowPixelIds)
+            }
+
+            if (!cancelled) {
+              setRollSession((current) => {
+                if (!current || current.result !== null) return current
+                if (current.statusMessage === 'Trying to reconnect remembered dice...') return current
+                return {
+                  ...current,
+                  statusMessage: 'Trying to reconnect remembered dice...',
+                }
+              })
+            }
+          }
+        } else {
+          // Connects already attempted for this roll session — do not retry.
+          if (!cancelled) {
+            setRollSession((current) => {
+              if (!current || current.result !== null) return current
+              if (current.statusMessage === 'Trying to reconnect remembered dice...') return current
+              return {
+                ...current,
+                statusMessage: 'Trying to reconnect remembered dice...',
+              }
+            })
           }
         }
       } finally {
@@ -1576,7 +1785,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       cancelled = true
       window.clearInterval(intervalId)
     }
-  }, [connectedPixels, isAwaitingRolls, pairedPixels, rollSession, scheduleGlowPrompt])
+  }, [isAwaitingRolls, rollSession, scheduleGlowPrompt])
 
   useEffect(() => {
     if (!isAwaitingRolls) {
@@ -1616,32 +1825,41 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       return
     }
 
-    const pendingGlowPixelIds = getPendingGlowPixelIds(rollSession, connectedPixels)
-    if (pendingGlowPixelIds.length === 0) {
-      return
-    }
-
-    const now = Date.now()
-
-    if (glowPauseUntil !== null && glowPauseUntil > now) {
-      const timeoutId = window.setTimeout(() => {
-        setGlowPauseUntil(null)
-        void handlePromptPendingDice()
-      }, glowPauseUntil - now)
-
-      return () => {
-        window.clearTimeout(timeoutId)
+    const intervalId = window.setInterval(() => {
+      const now = Date.now()
+      if (glowPauseUntil !== null && glowPauseUntil > now) {
+        // Respect the pause; wait for the next tick or explicit resume
+        return
       }
-    }
 
-    const timeoutId = window.setTimeout(() => {
+      const storeState = useAppStore.getState()
+      const latestConnectedPixels: ConnectedPixel[] = Object.values(storeState.pixels)
+        .filter((p) => p.connectionState === 'connected')
+        .map((p) => ({ pixelId: p.pixelId, dieType: p.dieType }))
+
+      const pendingGlowPixelIds = getPendingGlowPixelIds(rollSession, latestConnectedPixels)
+      if (pendingGlowPixelIds.length === 0) {
+        return
+      }
+
       void handlePromptPendingDice()
     }, ROLL_GLOW_REPEAT_MS)
 
-    return () => {
-      window.clearTimeout(timeoutId)
+    // If a pause is active, schedule an immediate resume when it expires so
+    // we don't wait for the next interval tick.
+    let resumeTimeout: number | null = null
+    if (glowPauseUntil !== null && glowPauseUntil > Date.now()) {
+      resumeTimeout = window.setTimeout(() => {
+        setGlowPauseUntil(null)
+        void handlePromptPendingDice()
+      }, glowPauseUntil - Date.now())
     }
-  }, [connectedPixels, glowPauseUntil, handlePromptPendingDice, isAwaitingRolls, rollSession])
+
+    return () => {
+      window.clearInterval(intervalId)
+      if (resumeTimeout !== null) window.clearTimeout(resumeTimeout)
+    }
+  }, [isAwaitingRolls, rollSession, glowPauseUntil, handlePromptPendingDice])
 
   useEffect(() => {
     if (!isAwaitingRolls) {
