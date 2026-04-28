@@ -10,7 +10,7 @@ import {
   onRollResult,
   reconnectPairedDice,
 } from '../services/pixelsService'
-import { DieIcon } from '../components/DieResultChip'
+import DieIcon from '../components/DieIcon'
 import type { DieType } from '../types/formula'
 import { useAppStore } from '../stores/useAppStore'
 
@@ -43,6 +43,7 @@ export default function SettingsScreen() {
   const [isReconnecting, setIsReconnecting] = useState(false)
   const [recentRolls, setRecentRolls] = useState<RecentRollEntry[]>([])
   const [toast, setToast] = useState<string | null>(null)
+  const toastTimeoutRef = useRef<number | null>(null)
   const nextRollId = useRef(0)
 
   const pixelEntries = useMemo(
@@ -99,7 +100,23 @@ export default function SettingsScreen() {
 
     setToast(bleError)
     clearBleError()
+
+    if (toastTimeoutRef.current !== null) {
+      window.clearTimeout(toastTimeoutRef.current)
+      toastTimeoutRef.current = null
+    }
+
+    toastTimeoutRef.current = window.setTimeout(() => setToast(null), 10_000)
   }, [bleError, clearBleError])
+
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current !== null) {
+        window.clearTimeout(toastTimeoutRef.current)
+        toastTimeoutRef.current = null
+      }
+    }
+  }, [])
 
   const handleConnect = async () => {
     setIsConnecting(true)

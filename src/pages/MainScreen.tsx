@@ -103,6 +103,7 @@ export default function MainScreen() {
   const [selectedHistoryEntry, setSelectedHistoryEntry] = useState<RollHistoryEntry | null>(null)
   const [toast, setToast] = useState<ToastState | null>(null)
   const toastId = useRef(0)
+  const toastTimeoutRef = useRef<number | null>(null)
   const quickConnectHoldTimer = useRef<number | null>(null)
   const quickConnectHoldTriggered = useRef(false)
 
@@ -119,7 +120,21 @@ export default function MainScreen() {
 
   const showToast = (message: string) => {
     toastId.current += 1
-    setToast({ id: toastId.current, message })
+    const id = toastId.current
+    setToast({ id, message })
+
+    if (toastTimeoutRef.current !== null) {
+      window.clearTimeout(toastTimeoutRef.current)
+      toastTimeoutRef.current = null
+    }
+
+    toastTimeoutRef.current = window.setTimeout(() => {
+      // only clear if this is still the latest toast
+      if (toastId.current === id) {
+        setToast(null)
+      }
+      toastTimeoutRef.current = null
+    }, 10_000)
   }
 
   const handleQuickConnect = async () => {
@@ -190,6 +205,15 @@ export default function MainScreen() {
       state: locationState?.mainBackGuard ? { mainBackGuard: true } : null,
     })
   }, [location.pathname, locationState, navigate])
+
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current !== null) {
+        window.clearTimeout(toastTimeoutRef.current)
+        toastTimeoutRef.current = null
+      }
+    }
+  }, [])
 
   useEffect(() => {
     if (location.pathname !== '/' || locationState?.mainBackGuard) {

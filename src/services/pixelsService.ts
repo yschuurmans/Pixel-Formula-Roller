@@ -34,6 +34,10 @@ export interface ReconnectOptions {
   suppressFailureError?: boolean
 }
 
+export interface ConnectRememberedDieOptions {
+  suppressErrors?: boolean
+}
+
 export interface GlowColor {
   r: number
   g: number
@@ -277,6 +281,27 @@ export class PixelsService {
     this.store.getState().removePixel(pixelId)
   }
 
+  async connectRememberedDie(pixelId: string, options: ConnectRememberedDieOptions = {}): Promise<boolean> {
+    try {
+      const pixel = await getPixel(pixelId)
+      if (!pixel) {
+        return false
+      }
+
+      return await this.connectRegisteredPixel(pixel)
+    } catch (error) {
+      if (!options.suppressErrors) {
+        this.store.getState().setBleError(toErrorMessage(error))
+      }
+
+      return false
+    }
+  }
+
+  markPixelUsed(pixelId: string, usedAt = Date.now()): void {
+    this.store.getState().markPairedPixelUsed(pixelId, usedAt)
+  }
+
   onRollResult(callback: RollResultCallback): Unsubscribe {
     this.rollCallbacks.add(callback)
 
@@ -323,7 +348,7 @@ export class PixelsService {
     this.cleanupPixel(pixelId)
     this.pixels.set(pixelId, pixel)
     this.registerPixel(pixelId, pixel, dieType)
-    this.store.getState().rememberPairedPixelId(pixelId)
+    this.store.getState().rememberPairedPixel({ pixelId, dieType })
 
     this.store.getState().addPixel({
       pixelId,
@@ -350,6 +375,7 @@ export class PixelsService {
 
       const face = normalizeRollFace(dieType, rawFace)
       this.store.getState().updatePixelState(pixelId, { lastFace: face })
+      this.store.getState().markPairedPixelUsed(pixelId, now)
 
       for (const callback of this.rollCallbacks) {
         callback(pixelId, face, dieType)
@@ -427,6 +453,17 @@ export async function disconnectDie(pixelId: string): Promise<void> {
 
 export async function forgetDie(pixelId: string): Promise<void> {
   await pixelsService.forgetDie(pixelId)
+}
+
+export async function connectRememberedDie(
+  pixelId: string,
+  options?: ConnectRememberedDieOptions,
+): Promise<boolean> {
+  return pixelsService.connectRememberedDie(pixelId, options)
+}
+
+export function markPixelUsed(pixelId: string, usedAt?: number): void {
+  pixelsService.markPixelUsed(pixelId, usedAt)
 }
 
 export function onRollResult(callback: RollResultCallback): Unsubscribe {

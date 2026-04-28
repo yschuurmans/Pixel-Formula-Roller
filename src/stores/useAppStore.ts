@@ -7,7 +7,7 @@ export const STORAGE_WARNING_MESSAGE = 'Storage full — oldest history entries 
 export const ROLL_HISTORY_PREVIEW_LIMIT = 5;
 export const ROLL_HISTORY_STORAGE_LIMIT = 50;
 
-type PersistedAppState = Pick<AppState, 'savedFormulas' | 'rollHistory' | 'settings' | 'pairedPixelIds'>;
+type PersistedAppState = Pick<AppState, 'savedFormulas' | 'rollHistory' | 'settings' | 'pairedPixelIds' | 'pairedPixels'>;
 
 export interface SavedFormula {
   id: string;
@@ -39,11 +39,18 @@ export interface PixelEntry {
   lastFace: number | null;
 }
 
+export interface RememberedPixelEntry {
+  pixelId: string;
+  dieType: DieType;
+  lastUsedAt: number | null;
+}
+
 interface AppState {
   savedFormulas: SavedFormula[];
   rollHistory: RollHistoryEntry[];
   settings: AppSettings;
   pairedPixelIds: string[];
+  pairedPixels: Record<string, RememberedPixelEntry>;
   pixels: Record<string, PixelEntry>;
   bleAvailable: boolean;
   bleError: string | null;
@@ -57,6 +64,8 @@ interface AppActions {
   addRollHistory: (entry: RollHistoryEntry) => void;
   clearRollHistory: () => void;
   rememberPairedPixelId: (pixelId: string) => void;
+  rememberPairedPixel: (entry: { pixelId: string; dieType: DieType }) => void;
+  markPairedPixelUsed: (pixelId: string, usedAt?: number) => void;
   forgetPairedPixelId: (pixelId: string) => void;
   addPixel: (entry: PixelEntry) => void;
   updatePixelState: (id: string, updates: Partial<PixelEntry>) => void;
@@ -132,6 +141,7 @@ export const useAppStore = create<AppState & AppActions>()(
       rollHistory: [],
       settings: defaultSettings,
       pairedPixelIds: [],
+      pairedPixels: {},
       pixels: {},
       bleAvailable: true,
       bleError: null,
@@ -160,9 +170,47 @@ export const useAppStore = create<AppState & AppActions>()(
             ? state.pairedPixelIds
             : [...state.pairedPixelIds, pixelId],
         })),
+      rememberPairedPixel: (entry) =>
+        set((state) => {
+          const existing = state.pairedPixels[entry.pixelId]
+
+          return {
+            pairedPixelIds: state.pairedPixelIds.includes(entry.pixelId)
+              ? state.pairedPixelIds
+              : [...state.pairedPixelIds, entry.pixelId],
+            pairedPixels: {
+              ...state.pairedPixels,
+              [entry.pixelId]: {
+                pixelId: entry.pixelId,
+                dieType: entry.dieType,
+                lastUsedAt: existing?.lastUsedAt ?? null,
+              },
+            },
+          }
+        }),
+      markPairedPixelUsed: (pixelId, usedAt = Date.now()) =>
+        set((state) => {
+          const existing = state.pairedPixels[pixelId]
+          if (!existing) {
+            return state
+          }
+
+          return {
+            pairedPixels: {
+              ...state.pairedPixels,
+              [pixelId]: {
+                ...existing,
+                lastUsedAt: usedAt,
+              },
+            },
+          }
+        }),
       forgetPairedPixelId: (pixelId) =>
         set((state) => ({
           pairedPixelIds: state.pairedPixelIds.filter((id) => id !== pixelId),
+          pairedPixels: Object.fromEntries(
+            Object.entries(state.pairedPixels).filter(([id]) => id !== pixelId),
+          ),
         })),
       addPixel: (entry) =>
         set((state) => ({ pixels: { ...state.pixels, [entry.pixelId]: entry } })),
@@ -190,7 +238,7 @@ export const useAppStore = create<AppState & AppActions>()(
     }),
     {
       name: 'pixel-formula-roller',
-      version: 2,
+      version: 3,
       storage: appStorage,
       migrate: (persistedState, _version) => {
         const typedState = persistedState as (Partial<PersistedAppState> & {
@@ -204,6 +252,7 @@ export const useAppStore = create<AppState & AppActions>()(
             theme: typedState?.settings?.theme ?? defaultSettings.theme,
           },
           pairedPixelIds: typedState?.pairedPixelIds ?? [],
+          pairedPixels: typedState?.pairedPixels ?? {},
         };
 
         return normalizedState;
@@ -213,6 +262,7 @@ export const useAppStore = create<AppState & AppActions>()(
         rollHistory: state.rollHistory,
         settings: state.settings,
         pairedPixelIds: state.pairedPixelIds,
+        pairedPixels: state.pairedPixels,
         // pixels is excluded from persist intentionally
       }),
     }

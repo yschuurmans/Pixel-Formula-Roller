@@ -84,6 +84,7 @@ function resetStore() {
   useAppStore.setState({
     pixels: {},
     pairedPixelIds: [],
+    pairedPixels: {},
     bleAvailable: true,
     bleError: null,
   })

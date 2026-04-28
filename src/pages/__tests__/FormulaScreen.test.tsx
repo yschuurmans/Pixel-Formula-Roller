@@ -6,11 +6,17 @@ import MainScreen from '../MainScreen'
 import { useAppStore } from '../../stores/useAppStore'
 
 const {
+  mockConnectRememberedDie,
+  mockDisconnectDie,
   mockGlowDie,
+  mockMarkPixelUsed,
   mockOnRollResult,
   mockStopAllGlows,
 } = vi.hoisted(() => ({
+  mockConnectRememberedDie: vi.fn(() => Promise.resolve(true)),
+  mockDisconnectDie: vi.fn(() => Promise.resolve()),
   mockGlowDie: vi.fn(() => Promise.resolve()),
+  mockMarkPixelUsed: vi.fn(),
   mockOnRollResult: vi.fn(),
   mockStopAllGlows: vi.fn(() => Promise.resolve()),
 }))
@@ -21,7 +27,10 @@ let rollCallback:
 const scrollIntoViewMock = vi.fn()
 
 vi.mock('../../services/pixelsService', () => ({
+  connectRememberedDie: mockConnectRememberedDie,
+  disconnectDie: mockDisconnectDie,
   glowDie: mockGlowDie,
+  markPixelUsed: mockMarkPixelUsed,
   onRollResult: mockOnRollResult.mockImplementation((callback: typeof rollCallback) => {
     rollCallback = callback
     return vi.fn()
@@ -110,6 +119,7 @@ function resetStore() {
     rollHistory: [],
     settings: { theme: 'dark' },
     pairedPixelIds: [],
+    pairedPixels: {},
     bleAvailable: true,
     bleError: null,
     pixels: {},
@@ -123,7 +133,10 @@ describe('FormulaScreen', () => {
     mockBlocker.state = 'unblocked'
     mockBlocker.proceed.mockReset()
     mockBlocker.reset.mockReset()
+    mockConnectRememberedDie.mockClear()
+    mockDisconnectDie.mockClear()
     mockGlowDie.mockClear()
+    mockMarkPixelUsed.mockClear()
     mockOnRollResult.mockClear()
     mockStopAllGlows.mockClear()
     rollCallback = undefined
@@ -561,6 +574,76 @@ describe('FormulaScreen', () => {
     expect(screen.getByLabelText('d6 #2')).toBeInTheDocument()
   })
 
+  it('tries reconnecting remembered dice instead of falling back to manual when the type is known', async () => {
+    useAppStore.setState({
+      pairedPixelIds: ['pixel-d6-memory'],
+      pairedPixels: {
+        'pixel-d6-memory': {
+          pixelId: 'pixel-d6-memory',
+          dieType: 'd6',
+          lastUsedAt: 10,
+        },
+      },
+    })
+
+    renderFormulaScreen(['/formula/new'])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add d6' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Roll' }))
+
+    await waitFor(() => expect(mockConnectRememberedDie).toHaveBeenCalledWith('pixel-d6-memory', { suppressErrors: true }))
+    expect(screen.queryByRole('button', { name: 'Submit manual rolls' })).not.toBeInTheDocument()
+    expect(screen.getByText('Trying to reconnect remembered dice...')).toBeInTheDocument()
+  })
+
+  it('disconnects the least recently used unrelated dice before reconnecting remembered required dice', async () => {
+    useAppStore.setState({
+      pairedPixelIds: ['pixel-d4', 'pixel-d6-needed', 'pixel-d8'],
+      pairedPixels: {
+        'pixel-d4': {
+          pixelId: 'pixel-d4',
+          dieType: 'd4',
+          lastUsedAt: 10,
+        },
+        'pixel-d6-needed': {
+          pixelId: 'pixel-d6-needed',
+          dieType: 'd6',
+          lastUsedAt: 100,
+        },
+        'pixel-d8': {
+          pixelId: 'pixel-d8',
+          dieType: 'd8',
+          lastUsedAt: 20,
+        },
+      },
+      pixels: {
+        'pixel-d4': {
+          pixelId: 'pixel-d4',
+          dieType: 'd4',
+          connectionState: 'connected',
+          batteryLevel: 80,
+          lastFace: null,
+        },
+        'pixel-d8': {
+          pixelId: 'pixel-d8',
+          dieType: 'd8',
+          connectionState: 'connected',
+          batteryLevel: 75,
+          lastFace: null,
+        },
+      },
+    })
+
+    renderFormulaScreen(['/formula/new'])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add d6' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Roll' }))
+
+    await waitFor(() => expect(mockDisconnectDie).toHaveBeenCalledWith('pixel-d4'))
+    await waitFor(() => expect(mockConnectRememberedDie).toHaveBeenCalledWith('pixel-d6-needed', { suppressErrors: true }))
+    expect(mockDisconnectDie).not.toHaveBeenCalledWith('pixel-d8')
+  })
+
   it('keeps the completed result visible until roll again is pressed', async () => {
     useAppStore.setState({
       pixels: {
@@ -839,6 +922,80 @@ describe('FormulaScreen', () => {
     expect(mockGlowDie).toHaveBeenCalledWith('pixel-d20-c')
     expect(mockGlowDie).not.toHaveBeenCalledWith('pixel-d20-a')
     expect(mockGlowDie).not.toHaveBeenCalledWith('pixel-d20-b')
+
+    randomSpy.mockRestore()
+  })
+
+  it('clicking a pending die after a partial shared-die roll glows only the remaining number needed', async () => {
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0)
+
+    useAppStore.setState({
+      pixels: {
+        'pixel-d8-a': {
+          pixelId: 'pixel-d8-a',
+          dieType: 'd8',
+          connectionState: 'connected',
+          batteryLevel: 80,
+          lastFace: null,
+        },
+        'pixel-d8-b': {
+          pixelId: 'pixel-d8-b',
+          dieType: 'd8',
+          connectionState: 'connected',
+          batteryLevel: 75,
+          lastFace: null,
+        },
+        'pixel-d8-c': {
+          pixelId: 'pixel-d8-c',
+          dieType: 'd8',
+          connectionState: 'connected',
+          batteryLevel: 70,
+          lastFace: null,
+        },
+        'pixel-d8-d': {
+          pixelId: 'pixel-d8-d',
+          dieType: 'd8',
+          connectionState: 'connected',
+          batteryLevel: 65,
+          lastFace: null,
+        },
+      },
+    })
+
+    renderFormulaScreen(['/formula/new'])
+
+    for (let index = 0; index < 6; index += 1) {
+      fireEvent.click(screen.getByRole('button', { name: 'Add d8' }))
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Roll' }))
+
+    await waitFor(() => expect(mockGlowDie).toHaveBeenCalledTimes(4))
+
+    await act(async () => {
+      rollCallback?.('pixel-d8-a', 8, 'd8')
+      await Promise.resolve()
+    })
+    await act(async () => {
+      rollCallback?.('pixel-d8-b', 7, 'd8')
+      await Promise.resolve()
+    })
+    await act(async () => {
+      rollCallback?.('pixel-d8-c', 6, 'd8')
+      await Promise.resolve()
+    })
+    await act(async () => {
+      rollCallback?.('pixel-d8-d', 5, 'd8')
+      await Promise.resolve()
+    })
+
+    mockGlowDie.mockClear()
+
+    fireEvent.click(screen.getByRole('button', { name: 'd8 #5 pending' }))
+
+    await waitFor(() => expect(mockGlowDie).toHaveBeenCalledTimes(2))
+    const glowedPixelIds = new Set(mockGlowDie.mock.calls.map((call) => String((call as any)[0])))
+    expect(glowedPixelIds.size).toBe(2)
+    expect(Array.from(glowedPixelIds).every((pixelId) => pixelId.startsWith('pixel-d8-'))).toBe(true)
 
     randomSpy.mockRestore()
   })

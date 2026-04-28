@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Navigate, useBlocker, useLocation, useNavigate, useParams, type BlockerFunction } from 'react-router-dom'
 import { evaluateFormula, extractRequiredDice, formulaToPickerState, parseFormula } from '../services/formulaParser'
-import { glowDie, onRollResult, stopAllGlows } from '../services/pixelsService'
-import { useAppStore } from '../stores/useAppStore'
+import { connectRememberedDie, disconnectDie, glowDie, markPixelUsed, onRollResult, stopAllGlows } from '../services/pixelsService'
+import { useAppStore, type RememberedPixelEntry } from '../stores/useAppStore'
 import type { DieRollResult, DieType, EvaluationResult, ParsedFormula } from '../types/formula'
 import DieIcon from '../components/DieIcon'
 import DieResultChip from '../components/DieResultChip'
@@ -10,6 +10,7 @@ import DieResultChip from '../components/DieResultChip'
 const DIE_ORDER: DieType[] = ['d4', 'd6', 'd8', 'd10', 'd12', 'd20', 'd100']
 const DISPLAY_DIE_ORDER: DieType[] = [...DIE_ORDER].reverse() as DieType[]
 const FORMULA_ROLL_TRANSITION_DELAY_MS = 900
+const REMEMBERED_DICE_RETRY_INTERVAL_MS = 2_000
 
 type KeepMode = 'kh' | 'kl'
 
@@ -62,6 +63,11 @@ type RollSession = {
 type ConnectedPixel = {
   pixelId: string
   dieType: DieType
+}
+
+type AvailabilityPlan = {
+  disconnectIds: string[]
+  connectIds: string[]
 }
 
 function displayDieType(dieType: DieType): string {
@@ -520,21 +526,33 @@ function createRollHistoryEntry(
 }
 
 function getGlowPixelIdsForSlots(slots: RollSlot[], connectedPixels: ConnectedPixel[]): string[] {
-  const promptedPixelIds = new Set(
-    slots
-      .filter((slot): slot is RollSlot & { pixelId: string } => slot.source === 'ble' && slot.pixelId !== null)
-      .map((slot) => slot.pixelId),
-  )
+  const promptedPixelIds = new Set<string>()
+  const unassignedCounts = new Map<DieType, number>()
 
-  if (promptedPixelIds.size > 0) {
-    return Array.from(promptedPixelIds)
+  for (const slot of slots) {
+    if (slot.source !== 'ble') {
+      continue
+    }
+
+    if (slot.pixelId !== null) {
+      promptedPixelIds.add(slot.pixelId)
+      continue
+    }
+
+    unassignedCounts.set(slot.dieType, (unassignedCounts.get(slot.dieType) ?? 0) + 1)
   }
 
-  const requiredDieTypes = new Set(slots.filter((slot) => slot.source === 'ble').map((slot) => slot.dieType))
+  for (const [dieType, count] of unassignedCounts) {
+    const availablePixels = connectedPixels.filter(
+      (pixel) => pixel.dieType === dieType && !promptedPixelIds.has(pixel.pixelId),
+    )
 
-  return connectedPixels
-    .filter((pixel) => requiredDieTypes.has(pixel.dieType))
-    .map((pixel) => pixel.pixelId)
+    for (const pixel of pickRandomPixels(availablePixels, Math.min(count, availablePixels.length))) {
+      promptedPixelIds.add(pixel.pixelId)
+    }
+  }
+
+  return Array.from(promptedPixelIds)
 }
 
 function getPendingGlowPixelIds(rollSession: RollSession, connectedPixels: ConnectedPixel[]): string[] {
@@ -542,6 +560,147 @@ function getPendingGlowPixelIds(rollSession: RollSession, connectedPixels: Conne
     rollSession.slots.filter((slot) => slot.face === null && slot.source === 'ble'),
     connectedPixels,
   )
+}
+
+function getRememberedPixelsByDieType(rememberedPixels: Record<string, RememberedPixelEntry>): Map<DieType, RememberedPixelEntry[]> {
+  const rememberedByDieType = new Map<DieType, RememberedPixelEntry[]>()
+
+  for (const rememberedPixel of Object.values(rememberedPixels)) {
+    const entries = rememberedByDieType.get(rememberedPixel.dieType) ?? []
+    entries.push(rememberedPixel)
+    rememberedByDieType.set(rememberedPixel.dieType, entries)
+  }
+
+  for (const entries of rememberedByDieType.values()) {
+    entries.sort((left, right) => (right.lastUsedAt ?? 0) - (left.lastUsedAt ?? 0))
+  }
+
+  return rememberedByDieType
+}
+
+function promoteRecoverableManualSlots(
+  slots: RollSlot[],
+  rememberedPixels: Record<string, RememberedPixelEntry>,
+): RollSlot[] {
+  const rememberedByDieType = getRememberedPixelsByDieType(rememberedPixels)
+
+  return slots.map((slot) => {
+    if (slot.source !== 'manual') {
+      return slot
+    }
+
+    if (!(rememberedByDieType.get(slot.dieType)?.length)) {
+      return slot
+    }
+
+    return {
+      ...slot,
+      source: 'ble',
+    }
+  })
+}
+
+function getPendingBleCounts(slots: RollSlot[]): Map<DieType, number> {
+  const counts = new Map<DieType, number>()
+
+  for (const slot of slots) {
+    if (slot.face !== null || slot.source !== 'ble') {
+      continue
+    }
+
+    counts.set(slot.dieType, (counts.get(slot.dieType) ?? 0) + 1)
+  }
+
+  return counts
+}
+
+function buildAvailabilityPlan(
+  slots: RollSlot[],
+  connectedPixels: ConnectedPixel[],
+  rememberedPixels: Record<string, RememberedPixelEntry>,
+): AvailabilityPlan {
+  const pendingCounts = getPendingBleCounts(slots)
+  if (pendingCounts.size === 0) {
+    return { disconnectIds: [], connectIds: [] }
+  }
+
+  const connectedCounts = new Map<DieType, number>()
+  const connectedPixelIds = new Set(connectedPixels.map((pixel) => pixel.pixelId))
+  for (const pixel of connectedPixels) {
+    connectedCounts.set(pixel.dieType, (connectedCounts.get(pixel.dieType) ?? 0) + 1)
+  }
+
+  const rememberedByDieType = getRememberedPixelsByDieType(rememberedPixels)
+  const connectIds: string[] = []
+
+  for (const dieType of DIE_ORDER) {
+    const pendingCount = pendingCounts.get(dieType) ?? 0
+    if (pendingCount === 0) {
+      continue
+    }
+
+    const currentlyConnected = connectedCounts.get(dieType) ?? 0
+    const missingCount = Math.max(0, pendingCount - currentlyConnected)
+    if (missingCount === 0) {
+      continue
+    }
+
+    const availableRemembered = (rememberedByDieType.get(dieType) ?? []).filter(
+      (pixel) => !connectedPixelIds.has(pixel.pixelId),
+    )
+
+    for (const rememberedPixel of availableRemembered.slice(0, missingCount)) {
+      connectIds.push(rememberedPixel.pixelId)
+    }
+  }
+
+  if (connectIds.length === 0) {
+    return { disconnectIds: [], connectIds: [] }
+  }
+
+  const remainingConnectedCounts = new Map(connectedCounts)
+  const connectedByAge = [...connectedPixels].sort(
+    (left, right) => (rememberedPixels[left.pixelId]?.lastUsedAt ?? 0) - (rememberedPixels[right.pixelId]?.lastUsedAt ?? 0),
+  )
+  const disconnectIds: string[] = []
+
+  for (const pixel of connectedByAge) {
+    const connectedCount = remainingConnectedCounts.get(pixel.dieType) ?? 0
+    const retainCount = Math.min(pendingCounts.get(pixel.dieType) ?? 0, connectedCounts.get(pixel.dieType) ?? 0)
+
+    if (connectedCount <= retainCount) {
+      continue
+    }
+
+    disconnectIds.push(pixel.pixelId)
+    remainingConnectedCounts.set(pixel.dieType, connectedCount - 1)
+
+    if (disconnectIds.length === connectIds.length) {
+      break
+    }
+  }
+
+  return { disconnectIds, connectIds }
+}
+
+function hasRecoverableRememberedPixel(
+  dieType: DieType,
+  rememberedPixels: Record<string, RememberedPixelEntry>,
+): boolean {
+  return Object.values(rememberedPixels).some((pixel) => pixel.dieType === dieType)
+}
+
+function markAssignedPixelsUsed(slots: RollSlot[]): void {
+  const seenPixelIds = new Set<string>()
+
+  for (const slot of slots) {
+    if (slot.source !== 'ble' || slot.pixelId === null || seenPixelIds.has(slot.pixelId)) {
+      continue
+    }
+
+    seenPixelIds.add(slot.pixelId)
+    markPixelUsed(slot.pixelId)
+  }
 }
 
 function AutoHideCountdown({ remainingMs, durationMs }: { remainingMs: number; durationMs: number }) {
@@ -583,6 +742,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
   const locationState = location.state as FormulaScreenLocationState | null
   const savedFormulas = useAppStore((state) => state.savedFormulas)
   const pixels = useAppStore((state) => state.pixels)
+  const pairedPixels = useAppStore((state) => state.pairedPixels)
   const addRollHistory = useAppStore((state) => state.addRollHistory)
   const addSavedFormula = useAppStore((state) => state.addSavedFormula)
   const updateSavedFormula = useAppStore((state) => state.updateSavedFormula)
@@ -613,6 +773,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
   const pendingRollScrollRef = useRef(false)
   const pendingGlowPromptTimeoutRef = useRef<number | null>(null)
   const queuedGlowPixelIdsRef = useRef<Set<string>>(new Set())
+  const availabilitySyncInFlightRef = useRef(false)
   const [autoHideRemainingMs, setAutoHideRemainingMs] = useState<number | null>(null)
   const [rollOnlyAutoHideExpired, setRollOnlyAutoHideExpired] = useState(false)
 
@@ -982,7 +1143,10 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     setRollOnlyAutoHideExpired(false)
     clearPendingGlowPrompt()
 
-    const slots = buildRollSlots(normalized.formulaText, connectedPixels)
+    const slots = promoteRecoverableManualSlots(
+      buildRollSlots(normalized.formulaText, connectedPixels),
+      pairedPixels,
+    )
     const nextSession: RollSession = {
       parsedFormula: parsed,
       slots,
@@ -993,6 +1157,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
 
     setManualInputs({})
     setRollSession(nextSession)
+  markAssignedPixelsUsed(slots)
 
     const pixelIdsToGlow = getGlowPixelIdsForSlots(slots, connectedPixels)
 
@@ -1251,18 +1416,8 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
         )
 
         if (pendingSameDieTypeSlots.length > 0) {
-          for (const slot of pendingSameDieTypeSlots) {
-            if (slot.pixelId) {
-              pixelsToGlow.add(slot.pixelId)
-            }
-          }
-
-          if (pixelsToGlow.size === 0) {
-            for (const pixel of connectedPixels) {
-              if (pixel.dieType === dieType) {
-                pixelsToGlow.add(pixel.pixelId)
-              }
-            }
+          for (const pixelId of getGlowPixelIdsForSlots(pendingSameDieTypeSlots, connectedPixels)) {
+            pixelsToGlow.add(pixelId)
           }
         }
 
@@ -1274,6 +1429,83 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       }
     })
   }, [completeRollSession, connectedPixels, isAwaitingRolls, scheduleGlowPrompt])
+
+  useEffect(() => {
+    if (!isAwaitingRolls || !rollSession || rollSession.result !== null) {
+      return
+    }
+
+    let cancelled = false
+
+    const syncRememberedDice = async () => {
+      if (availabilitySyncInFlightRef.current) {
+        return
+      }
+
+      availabilitySyncInFlightRef.current = true
+
+      try {
+        const plan = buildAvailabilityPlan(rollSession.slots, connectedPixels, pairedPixels)
+
+        if (cancelled) {
+          return
+        }
+
+        if (plan.connectIds.length === 0) {
+          const needsRecovery = rollSession.slots.some(
+            (slot) => slot.face === null && slot.source === 'ble' && !connectedPixels.some((pixel) => pixel.dieType === slot.dieType),
+          )
+
+          if (needsRecovery && !cancelled) {
+            setRollSession((current) =>
+              current && current.result === null
+                ? {
+                    ...current,
+                    statusMessage: 'Trying to reconnect remembered dice...',
+                  }
+                : current,
+            )
+          }
+
+          return
+        }
+
+        await Promise.allSettled(plan.disconnectIds.map((pixelId) => disconnectDie(pixelId)))
+
+        for (const pixelId of plan.connectIds) {
+          if (cancelled) {
+            break
+          }
+
+          await connectRememberedDie(pixelId, { suppressErrors: true })
+        }
+
+        if (!cancelled) {
+          setRollSession((current) =>
+            current && current.result === null
+              ? {
+                  ...current,
+                  statusMessage: 'Trying to reconnect remembered dice...',
+                }
+              : current,
+          )
+        }
+      } finally {
+        availabilitySyncInFlightRef.current = false
+      }
+    }
+
+    void syncRememberedDice()
+
+    const intervalId = window.setInterval(() => {
+      void syncRememberedDice()
+    }, REMEMBERED_DICE_RETRY_INTERVAL_MS)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [connectedPixels, isAwaitingRolls, pairedPixels, rollSession])
 
   useEffect(() => {
     if (!isAwaitingRolls) {
@@ -1301,6 +1533,15 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
           return slot
         }
 
+        if (hasRecoverableRememberedPixel(slot.dieType, pairedPixels)) {
+          statusMessage = 'Trying to reconnect remembered dice...'
+          return {
+            ...slot,
+            source: 'ble' as const,
+            pixelId: null,
+          }
+        }
+
         mutated = true
         statusMessage = `${displayDieType(slot.logicalDieType)} disconnected — enter result manually.`
 
@@ -1323,7 +1564,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
 
       return nextSession
     })
-  }, [completeRollSession, isAwaitingRolls, pixels])
+  }, [completeRollSession, isAwaitingRolls, pairedPixels, pixels])
 
   if (navigationIntent) {
     return (

@@ -2,7 +2,7 @@ param(
     [ValidateSet('check-device', 'full-deploy', 'install-debug', 'logcat')]
     [string]$Mode = 'check-device',
 
-    [string]$DeviceId,
+    [string]$DeviceId = 'RFCWA1BTTRD',
 
     [string]$JavaHome = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.10.7-hotspot',
 
