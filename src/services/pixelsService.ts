@@ -1,3 +1,13 @@
+import {
+  AnimConstants,
+  AnimationGradient,
+  AnimationSequence,
+  DataSet,
+  DiceUtils,
+  RgbKeyframe,
+  RgbTrack,
+  getFaceMask,
+} from '@systemic-games/pixels-core-animation'
 import { Color } from '@systemic-games/pixels-web-connect'
 import {
   getBleAvailability,
@@ -14,6 +24,8 @@ import { useAppStore } from '../stores/useAppStore'
 
 const ROLL_DEDUP_MS = 300
 const CONNECTED_GLOW_COLOR: GlowColor = { r: 34, g: 197, b: 94 }
+const CLEANUP_BASE_GLOW_COLOR: GlowColor = { r: 48, g: 48, b: 48 }
+const CLEANUP_ANIMATION_DURATION_MS = 60_000
 const MULTI_CONNECT_BATCH_SIZE = 6
 const MULTI_CONNECT_BATCH_DELAY_MS = 150
 const PERMISSION_DENIED_MESSAGE = "Bluetooth permission denied. Tap 'Connect' to try again."
@@ -48,6 +60,17 @@ export interface GlowColor {
   r: number
   g: number
   b: number
+}
+
+interface GlowOptions {
+  color?: GlowColor
+  faceMask?: number
+}
+
+interface CleanupGlowOptions {
+  baseColor?: GlowColor
+  lowFaceColor?: GlowColor
+  highFaceColor?: GlowColor
 }
 
 type AppStore = Pick<typeof useAppStore, 'getState' | 'setState'>
@@ -176,6 +199,7 @@ export class PixelsService {
   private readonly cleanups = new Map<string, Unsubscribe[]>()
   private readonly rollCallbacks = new Set<RollResultCallback>()
   private readonly lastRollAt = new Map<string, number>()
+  private readonly cleanupAnimationHashes = new Map<string, number>()
 
   constructor(store: AppStore = useAppStore) {
     this.store = store
@@ -350,7 +374,59 @@ export class PixelsService {
       return
     }
 
-    await pixel.blink(toBlinkColor(color))
+    await this.blinkPixel(pixel, { color })
+  }
+
+  async glowDieFace(pixelId: string, face: number, color?: GlowColor): Promise<void> {
+    const pixel = this.pixels.get(pixelId)
+    if (!pixel) {
+      return
+    }
+
+    const faceMask = this.getFaceMaskForPixel(pixel, face)
+    if (faceMask === null) {
+      return
+    }
+
+    await this.blinkPixel(pixel, { color, faceMask })
+  }
+
+  async glowDieLowestFace(pixelId: string, color?: GlowColor): Promise<void> {
+    const pixel = this.pixels.get(pixelId)
+    if (!pixel) {
+      return
+    }
+
+    await this.glowDieFace(pixelId, DiceUtils.getLowestFace(pixel.dieType), color)
+  }
+
+  async glowDieHighestFace(pixelId: string, color?: GlowColor): Promise<void> {
+    const pixel = this.pixels.get(pixelId)
+    if (!pixel) {
+      return
+    }
+
+    await this.glowDieFace(pixelId, DiceUtils.getHighestFace(pixel.dieType), color)
+  }
+
+  async glowCleanupOrientation(pixelId: string, options: CleanupGlowOptions = {}): Promise<void> {
+    const pixel = this.pixels.get(pixelId)
+    if (!pixel) {
+      return
+    }
+
+    const dataSet = this.createCleanupAnimationDataSet(pixel, options)
+    if (!dataSet) {
+      return
+    }
+
+    const animationHash = DataSet.computeHash(dataSet.toAnimationsByteArray())
+    if (this.cleanupAnimationHashes.get(pixelId) !== animationHash) {
+      await pixel.transferInstantAnimations(dataSet)
+      this.cleanupAnimationHashes.set(pixelId, animationHash)
+    }
+
+    await pixel.playInstantAnimation(3)
   }
 
   async stopGlow(pixelId: string): Promise<void> {
@@ -366,6 +442,80 @@ export class PixelsService {
     await Promise.allSettled(
       Array.from(this.pixels.keys(), (pixelId) => this.stopGlow(pixelId)),
     )
+  }
+
+  private async blinkPixel(pixel: Pixel, options: GlowOptions = {}): Promise<void> {
+    const blinkOptions = options.faceMask === undefined ? undefined : { faceMask: options.faceMask }
+    await pixel.blink(toBlinkColor(options.color), blinkOptions)
+  }
+
+  private createCleanupAnimationDataSet(pixel: Pixel, options: CleanupGlowOptions): DataSet | null {
+    const lowestFaceMask = this.getFaceMaskForPixel(pixel, DiceUtils.getLowestFace(pixel.dieType))
+    const highestFaceMask = this.getFaceMaskForPixel(pixel, DiceUtils.getHighestFace(pixel.dieType))
+    if (lowestFaceMask === null || highestFaceMask === null) {
+      return null
+    }
+
+    const dataSet = new DataSet()
+    const baseColorIndex = this.pushColorKeyframeTrack(dataSet, options.baseColor ?? CLEANUP_BASE_GLOW_COLOR)
+    const lowFaceColorIndex = this.pushColorKeyframeTrack(dataSet, options.lowFaceColor ?? { r: 239, g: 68, b: 68 })
+    const highFaceColorIndex = this.pushColorKeyframeTrack(dataSet, options.highFaceColor ?? { r: 34, g: 197, b: 94 })
+
+    dataSet.animations.push(
+      this.createGradientAnimation(AnimConstants.faceMaskAll, baseColorIndex),
+      this.createGradientAnimation(lowestFaceMask, highFaceColorIndex),
+      this.createGradientAnimation(highestFaceMask, lowFaceColorIndex),
+      this.createCombinedCleanupAnimation(),
+    )
+
+    return dataSet
+  }
+
+  private pushColorKeyframeTrack(dataSet: DataSet, color: GlowColor): number {
+    const colorIndex = dataSet.animationBits.palette.length
+    dataSet.animationBits.palette.push(toBlinkColor(color))
+
+    const keyframe = new RgbKeyframe()
+    keyframe.setTimeAndColorIndex(0, colorIndex)
+
+    const track = new RgbTrack()
+    track.keyframesOffset = dataSet.animationBits.rgbKeyframes.length
+    track.keyFrameCount = 1
+    track.ledMask = 0
+
+    dataSet.animationBits.rgbKeyframes.push(keyframe)
+    dataSet.animationBits.rgbTracks.push(track)
+
+    return dataSet.animationBits.rgbTracks.length - 1
+  }
+
+  private createGradientAnimation(faceMask: number, gradientTrackOffset: number): AnimationGradient {
+    const animation = new AnimationGradient()
+    animation.duration = CLEANUP_ANIMATION_DURATION_MS
+    animation.faceMask = faceMask
+    animation.gradientTrackOffset = gradientTrackOffset
+    return animation
+  }
+
+  private createCombinedCleanupAnimation(): AnimationSequence {
+    const animation = new AnimationSequence()
+    animation.duration = CLEANUP_ANIMATION_DURATION_MS
+    animation.animation0Offset = 0
+    animation.animation1Offset = 1
+    animation.animation2Offset = 2
+    animation.animation0Delay = 0
+    animation.animation1Delay = 0
+    animation.animation2Delay = 0
+    animation.animationCount = 3
+    return animation
+  }
+
+  private getFaceMaskForPixel(pixel: Pixel, face: number): number | null {
+    try {
+      return getFaceMask(face, pixel.dieType)
+    } catch {
+      return null
+    }
   }
 
   private async connectRegisteredPixel(pixel: Pixel): Promise<boolean> {
@@ -474,6 +624,7 @@ export class PixelsService {
     this.cleanups.delete(pixelId)
     this.pixels.delete(pixelId)
     this.lastRollAt.delete(pixelId)
+    this.cleanupAnimationHashes.delete(pixelId)
   }
 }
 
@@ -540,6 +691,22 @@ export function onRollResult(callback: RollResultCallback): Unsubscribe {
 
 export async function glowDie(pixelId: string, color?: GlowColor): Promise<void> {
   await pixelsService.glowDie(pixelId, color)
+}
+
+export async function glowDieFace(pixelId: string, face: number, color?: GlowColor): Promise<void> {
+  await pixelsService.glowDieFace(pixelId, face, color)
+}
+
+export async function glowDieLowestFace(pixelId: string, color?: GlowColor): Promise<void> {
+  await pixelsService.glowDieLowestFace(pixelId, color)
+}
+
+export async function glowDieHighestFace(pixelId: string, color?: GlowColor): Promise<void> {
+  await pixelsService.glowDieHighestFace(pixelId, color)
+}
+
+export async function glowCleanupOrientation(pixelId: string, options?: CleanupGlowOptions): Promise<void> {
+  await pixelsService.glowCleanupOrientation(pixelId, options)
 }
 
 export async function stopGlow(pixelId: string): Promise<void> {

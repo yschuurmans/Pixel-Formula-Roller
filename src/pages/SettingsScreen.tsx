@@ -7,6 +7,7 @@ import {
   forgetDie,
   getBleUnavailableMessage,
   glowDie,
+  glowCleanupOrientation,
   reconnectPairedDice,
   stopGlow,
 } from '../services/pixelsService'
@@ -16,7 +17,10 @@ import { useAppStore } from '../stores/useAppStore'
 
 const CLEANUP_DIE_ORDER: DieType[] = ['d4', 'd6', 'd8', 'd10', 'd12', 'd20', 'd100']
 const CLEANUP_RECONNECT_INTERVAL_MS = 2_000
-const CLEANUP_GLOW_INTERVAL_MS = 1_000
+const CLEANUP_GLOW_INTERVAL_MS = 30_000
+const CLEANUP_BASE_GLOW = { r: 40, g: 40, b: 40 } as const
+const CLEANUP_LOW_FACE_GLOW = { r: 255, g: 68, b: 68 } as const
+const CLEANUP_HIGH_FACE_GLOW = { r: 34, g: 255, b: 94 } as const
 
 function displayDieType(dieType: DieType): string {
   return dieType === 'd100' ? 'd%' : dieType
@@ -171,6 +175,14 @@ export default function SettingsScreen() {
     }
   }
 
+  const glowCleanupFacesForPixel = async (pixelId: string) => {
+    await glowCleanupOrientation(pixelId, {
+      baseColor: CLEANUP_BASE_GLOW,
+      lowFaceColor: CLEANUP_LOW_FACE_GLOW,
+      highFaceColor: CLEANUP_HIGH_FACE_GLOW,
+    })
+  }
+
   useEffect(() => {
     if (activeCleanupDieType === null) {
       return
@@ -198,15 +210,16 @@ export default function SettingsScreen() {
     }
 
     const glowCleanupDice = async () => {
-      const connectedIds = Object.values(latestPixelsRef.current)
+      const connectedPixels = Object.values(latestPixelsRef.current)
         .filter((pixel) => pixel.connectionState === 'connected' && pixel.dieType === activeCleanupDieType)
-        .map((pixel) => pixel.pixelId)
 
-      if (connectedIds.length === 0 || cancelled) {
+      if (connectedPixels.length === 0 || cancelled) {
         return
       }
 
-      await Promise.allSettled(connectedIds.map((pixelId) => glowDie(pixelId)))
+      await Promise.allSettled(
+        connectedPixels.map((pixel) => glowCleanupFacesForPixel(pixel.pixelId)),
+      )
     }
 
     void reconnectCleanupDice()
@@ -231,8 +244,14 @@ export default function SettingsScreen() {
       return
     }
 
-    void Promise.allSettled(cleanupConnectedPixelIds.map((pixelId) => glowDie(pixelId)))
-  }, [activeCleanupDieType, cleanupConnectedPixelIds])
+    const connectedPixels = pixelEntries.filter(
+      (pixel) => pixel.connectionState === 'connected' && pixel.dieType === activeCleanupDieType,
+    )
+
+    void Promise.allSettled(
+      connectedPixels.map((pixel) => glowCleanupFacesForPixel(pixel.pixelId)),
+    )
+  }, [activeCleanupDieType, cleanupConnectedPixelIds, pixelEntries])
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,#2d2340,transparent_35%),linear-gradient(180deg,#17121d_0%,#0e0b12_100%)] px-4 py-5 text-[#f7ead4] md:px-8 md:py-8">

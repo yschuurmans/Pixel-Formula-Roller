@@ -47,9 +47,17 @@ class FakePixel {
   systemId: string
   dieType: string
   batteryLevel: number
-  blinkCalls: unknown[] = []
+  blinkCalls: Array<{ color: unknown; options: unknown }> = []
+  instantAnimationDataSets: unknown[] = []
+  playedInstantAnimations: number[] = []
   stopAllAnimations = vi.fn(async () => undefined)
   disconnect = vi.fn(async () => undefined)
+  transferInstantAnimations = vi.fn(async (dataSet: unknown) => {
+    this.instantAnimationDataSets.push(dataSet)
+  })
+  playInstantAnimation = vi.fn(async (animationIndex: number) => {
+    this.playedInstantAnimations.push(animationIndex)
+  })
   private readonly listeners = new Map<keyof PixelEventMap, Set<(event: unknown) => void>>()
 
   constructor({ systemId, dieType, batteryLevel = 55 }: { systemId: string; dieType: string; batteryLevel?: number }) {
@@ -68,8 +76,8 @@ class FakePixel {
     this.listeners.get(type)?.delete(listener as (event: unknown) => void)
   }
 
-  blink = vi.fn(async (color: unknown) => {
-    this.blinkCalls.push(color)
+  blink = vi.fn(async (color: unknown, options?: unknown) => {
+    this.blinkCalls.push({ color, options })
   })
 
   emit<K extends keyof PixelEventMap>(type: K, event: PixelEventMap[K]) {
@@ -200,7 +208,7 @@ describe('pixelsService', () => {
     })
     expect(useAppStore.getState().pairedPixelIds).toEqual(['pixel-1'])
     expect(pixel.blink).toHaveBeenCalledTimes(1)
-    const connectBlinkColor = pixel.blinkCalls[0] as { rByte: number; gByte: number; bByte: number }
+    const connectBlinkColor = pixel.blinkCalls[0]?.color as { rByte: number; gByte: number; bByte: number }
     expect(connectBlinkColor.rByte).toBe(34)
     expect(connectBlinkColor.gByte).toBe(197)
     expect(connectBlinkColor.bByte).toBe(94)
@@ -295,11 +303,42 @@ describe('pixelsService', () => {
     await service.stopGlow('pixel-3')
 
     expect(pixel.blink).toHaveBeenCalledTimes(2)
-    const blinkColor = pixel.blinkCalls[1] as { rByte: number; gByte: number; bByte: number }
+    const blinkColor = pixel.blinkCalls[1]?.color as { rByte: number; gByte: number; bByte: number }
     expect(blinkColor.rByte).toBe(12)
     expect(blinkColor.gByte).toBe(34)
     expect(blinkColor.bByte).toBe(56)
     expect(pixel.stopAllAnimations).toHaveBeenCalledTimes(1)
+  })
+
+  it('targets an individual die face by passing a face mask to blink', async () => {
+    const pixel = new FakePixel({ systemId: 'pixel-5', dieType: 'd20' })
+    requestPixelsMock.mockResolvedValue([pixel])
+    repeatConnectMock.mockResolvedValue(undefined)
+    const service = new PixelsService(useAppStore)
+
+    await service.connectDie()
+    await service.glowDieFace('pixel-5', 20, { r: 34, g: 197, b: 94 })
+
+    expect(pixel.blink).toHaveBeenCalledTimes(2)
+    expect(pixel.blinkCalls[1]?.options).toEqual({ faceMask: 1 << 19 })
+  })
+
+  it('plays cleanup orientation as one combined instant animation', async () => {
+    const pixel = new FakePixel({ systemId: 'pixel-6', dieType: 'd20' })
+    requestPixelsMock.mockResolvedValue([pixel])
+    repeatConnectMock.mockResolvedValue(undefined)
+    const service = new PixelsService(useAppStore)
+
+    await service.connectDie()
+    await service.glowCleanupOrientation('pixel-6', {
+      baseColor: { r: 48, g: 48, b: 48 },
+      lowFaceColor: { r: 239, g: 68, b: 68 },
+      highFaceColor: { r: 34, g: 197, b: 94 },
+    })
+
+    expect(pixel.transferInstantAnimations).toHaveBeenCalledTimes(1)
+    expect(pixel.playInstantAnimation).toHaveBeenCalledWith(3)
+    expect(pixel.blink).toHaveBeenCalledTimes(1)
   })
 
   it('disconnects a die and marks it disconnected in store', async () => {

@@ -10,6 +10,7 @@ const {
   disconnectDieMock,
   forgetDieMock,
   getBleUnavailableMessageMock,
+  glowCleanupOrientationMock,
   glowDieMock,
   reconnectPairedDiceMock,
   stopGlowMock,
@@ -19,6 +20,7 @@ const {
   disconnectDieMock: vi.fn(),
   forgetDieMock: vi.fn(),
   getBleUnavailableMessageMock: vi.fn(() => 'Bluetooth is unavailable in this Android build because the native Pixels BLE bridge is not implemented yet.'),
+  glowCleanupOrientationMock: vi.fn(),
   glowDieMock: vi.fn(),
   reconnectPairedDiceMock: vi.fn(),
   stopGlowMock: vi.fn(),
@@ -30,6 +32,7 @@ vi.mock('../../services/pixelsService', () => ({
   disconnectDie: disconnectDieMock,
   forgetDie: forgetDieMock,
   getBleUnavailableMessage: getBleUnavailableMessageMock,
+  glowCleanupOrientation: glowCleanupOrientationMock,
   glowDie: glowDieMock,
   reconnectPairedDice: reconnectPairedDiceMock,
   stopGlow: stopGlowMock,
@@ -80,6 +83,7 @@ describe('SettingsScreen', () => {
     connectDieMock.mockReset()
     disconnectDieMock.mockReset()
     forgetDieMock.mockReset()
+    glowCleanupOrientationMock.mockReset()
     glowDieMock.mockReset()
     getBleUnavailableMessageMock.mockClear()
     reconnectPairedDiceMock.mockReset()
@@ -244,7 +248,11 @@ describe('SettingsScreen', () => {
       suppressErrors: true,
       continueOnError: true,
     })
-    expect(glowDieMock).toHaveBeenCalledWith('pixel-d6-live')
+    expect(glowCleanupOrientationMock).toHaveBeenCalledWith('pixel-d6-live', {
+      baseColor: { r: 48, g: 48, b: 48 },
+      lowFaceColor: { r: 239, g: 68, b: 68 },
+      highFaceColor: { r: 34, g: 197, b: 94 },
+    })
 
     await act(async () => {
       fireEvent.click(d20Toggle)
@@ -285,21 +293,66 @@ describe('SettingsScreen', () => {
     })
 
     expect(connectRememberedDiceMock).toHaveBeenCalledTimes(1)
-    expect(glowDieMock).toHaveBeenCalledWith('pixel-d6-live')
-
-    connectRememberedDiceMock.mockClear()
-    glowDieMock.mockClear()
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_000)
+    expect(glowCleanupOrientationMock).toHaveBeenCalledWith('pixel-d6-live', {
+      baseColor: { r: 48, g: 48, b: 48 },
+      lowFaceColor: { r: 239, g: 68, b: 68 },
+      highFaceColor: { r: 34, g: 197, b: 94 },
     })
 
-    expect(glowDieMock).toHaveBeenCalledWith('pixel-d6-live')
+    connectRememberedDiceMock.mockClear()
+    glowCleanupOrientationMock.mockClear()
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_000)
+      await vi.advanceTimersByTimeAsync(30_000)
+    })
+
+    expect(glowCleanupOrientationMock).toHaveBeenCalledWith('pixel-d6-live', {
+      baseColor: { r: 48, g: 48, b: 48 },
+      lowFaceColor: { r: 239, g: 68, b: 68 },
+      highFaceColor: { r: 34, g: 197, b: 94 },
+    })
+    expect(connectRememberedDiceMock).toHaveBeenCalledTimes(15)
+
+    connectRememberedDiceMock.mockClear()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000)
     })
 
     expect(connectRememberedDiceMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('targets the cleanup glow to the lowest and highest faces without using lastFace', async () => {
+    useAppStore.setState({
+      pairedPixels: {
+        'pixel-d20-a': {
+          pixelId: 'pixel-d20-a',
+          dieType: 'd20',
+          lastUsedAt: 10,
+        },
+      },
+      pixels: {
+        'pixel-d20-a': {
+          pixelId: 'pixel-d20-a',
+          dieType: 'd20',
+          connectionState: 'connected',
+          batteryLevel: 80,
+          lastFace: 7,
+        },
+      },
+    })
+
+    renderSettingsScreen()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('switch', { name: 'd20 cleanup' }))
+      await Promise.resolve()
+    })
+
+    expect(glowCleanupOrientationMock).toHaveBeenCalledWith('pixel-d20-a', {
+      baseColor: { r: 48, g: 48, b: 48 },
+      lowFaceColor: { r: 239, g: 68, b: 68 },
+      highFaceColor: { r: 34, g: 197, b: 94 },
+    })
   })
 })
