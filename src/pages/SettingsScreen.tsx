@@ -1,26 +1,22 @@
-import { formatDistanceToNow } from 'date-fns'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
+  connectRememberedDice,
   connectDie,
   disconnectDie,
   forgetDie,
   getBleUnavailableMessage,
   glowDie,
-  onRollResult,
   reconnectPairedDice,
+  stopGlow,
 } from '../services/pixelsService'
 import DieIcon from '../components/DieIcon'
 import type { DieType } from '../types/formula'
 import { useAppStore } from '../stores/useAppStore'
 
-interface RecentRollEntry {
-  id: number
-  pixelId: string
-  face: number
-  dieType: DieType
-  rolledAt: number
-}
+const CLEANUP_DIE_ORDER: DieType[] = ['d4', 'd6', 'd8', 'd10', 'd12', 'd20', 'd100']
+const CLEANUP_RECONNECT_INTERVAL_MS = 2_000
+const CLEANUP_GLOW_INTERVAL_MS = 1_000
 
 function displayDieType(dieType: DieType): string {
   return dieType === 'd100' ? 'd%' : dieType
@@ -34,6 +30,7 @@ export default function SettingsScreen() {
   const navigate = useNavigate()
   const pixels = useAppStore((state) => state.pixels)
   const pairedPixelIds = useAppStore((state) => state.pairedPixelIds)
+  const pairedPixels = useAppStore((state) => state.pairedPixels)
   const bleAvailable = useAppStore((state) => state.bleAvailable)
   const bleError = useAppStore((state) => state.bleError)
   const clearBleError = useAppStore((state) => state.clearBleError)
@@ -41,10 +38,12 @@ export default function SettingsScreen() {
   const [isConnecting, setIsConnecting] = useState(false)
   const [isFlashingAll, setIsFlashingAll] = useState(false)
   const [isReconnecting, setIsReconnecting] = useState(false)
-  const [recentRolls, setRecentRolls] = useState<RecentRollEntry[]>([])
+  const [activeCleanupDieType, setActiveCleanupDieType] = useState<DieType | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const toastTimeoutRef = useRef<number | null>(null)
-  const nextRollId = useRef(0)
+  const latestPixelsRef = useRef(pixels)
+  const latestPairedPixelsRef = useRef(pairedPixels)
+  const previousCleanupDieTypeRef = useRef<DieType | null>(null)
 
   const pixelEntries = useMemo(
     () =>
@@ -72,26 +71,23 @@ export default function SettingsScreen() {
     () => pixelEntries.filter((pixel) => pixel.connectionState === 'connected').map((pixel) => pixel.pixelId),
     [pixelEntries],
   )
+  const cleanupConnectedPixelIds = useMemo(
+    () =>
+      activeCleanupDieType === null
+        ? []
+        : pixelEntries
+            .filter((pixel) => pixel.connectionState === 'connected' && pixel.dieType === activeCleanupDieType)
+            .map((pixel) => pixel.pixelId),
+    [activeCleanupDieType, pixelEntries],
+  )
 
   useEffect(() => {
-    const unsubscribe = onRollResult((pixelId, face, dieType) => {
-      const rolledAt = Date.now()
-      nextRollId.current += 1
+    latestPixelsRef.current = pixels
+  }, [pixels])
 
-      setRecentRolls((current) => [
-        {
-          id: nextRollId.current,
-          pixelId,
-          face,
-          dieType,
-          rolledAt,
-        },
-        ...current,
-      ].slice(0, 8))
-    })
-
-    return unsubscribe
-  }, [])
+  useEffect(() => {
+    latestPairedPixelsRef.current = pairedPixels
+  }, [pairedPixels])
 
   useEffect(() => {
     if (!bleError) {
@@ -114,6 +110,32 @@ export default function SettingsScreen() {
       if (toastTimeoutRef.current !== null) {
         window.clearTimeout(toastTimeoutRef.current)
         toastTimeoutRef.current = null
+      }
+    }
+  }, [])
+
+  const stopCleanupGlowForType = async (dieType: DieType) => {
+    const pixelIds = Object.values(latestPixelsRef.current)
+      .filter((pixel) => pixel.connectionState === 'connected' && pixel.dieType === dieType)
+      .map((pixel) => pixel.pixelId)
+
+    await Promise.allSettled(pixelIds.map((pixelId) => stopGlow(pixelId)))
+  }
+
+  useEffect(() => {
+    const previousDieType = previousCleanupDieTypeRef.current
+
+    if (previousDieType !== null && previousDieType !== activeCleanupDieType) {
+      void stopCleanupGlowForType(previousDieType)
+    }
+
+    previousCleanupDieTypeRef.current = activeCleanupDieType
+  }, [activeCleanupDieType])
+
+  useEffect(() => {
+    return () => {
+      if (previousCleanupDieTypeRef.current !== null) {
+        void stopCleanupGlowForType(previousCleanupDieTypeRef.current)
       }
     }
   }, [])
@@ -149,6 +171,69 @@ export default function SettingsScreen() {
     }
   }
 
+  useEffect(() => {
+    if (activeCleanupDieType === null) {
+      return
+    }
+
+    let cancelled = false
+
+    const reconnectCleanupDice = async () => {
+      const rememberedPixelIds = Object.values(latestPairedPixelsRef.current)
+        .filter((pixel) => pixel.dieType === activeCleanupDieType)
+        .map((pixel) => pixel.pixelId)
+      const connectedIds = Object.values(latestPixelsRef.current)
+        .filter((pixel) => pixel.connectionState === 'connected' && pixel.dieType === activeCleanupDieType)
+        .map((pixel) => pixel.pixelId)
+      const missingPixelIds = rememberedPixelIds.filter((pixelId) => !connectedIds.includes(pixelId))
+
+      if (missingPixelIds.length === 0 || cancelled) {
+        return
+      }
+
+      await connectRememberedDice(missingPixelIds, {
+        suppressErrors: true,
+        continueOnError: true,
+      })
+    }
+
+    const glowCleanupDice = async () => {
+      const connectedIds = Object.values(latestPixelsRef.current)
+        .filter((pixel) => pixel.connectionState === 'connected' && pixel.dieType === activeCleanupDieType)
+        .map((pixel) => pixel.pixelId)
+
+      if (connectedIds.length === 0 || cancelled) {
+        return
+      }
+
+      await Promise.allSettled(connectedIds.map((pixelId) => glowDie(pixelId)))
+    }
+
+    void reconnectCleanupDice()
+    void glowCleanupDice()
+
+    const reconnectIntervalId = window.setInterval(() => {
+      void reconnectCleanupDice()
+    }, CLEANUP_RECONNECT_INTERVAL_MS)
+    const glowIntervalId = window.setInterval(() => {
+      void glowCleanupDice()
+    }, CLEANUP_GLOW_INTERVAL_MS)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(reconnectIntervalId)
+      window.clearInterval(glowIntervalId)
+    }
+  }, [activeCleanupDieType])
+
+  useEffect(() => {
+    if (activeCleanupDieType === null || cleanupConnectedPixelIds.length === 0) {
+      return
+    }
+
+    void Promise.allSettled(cleanupConnectedPixelIds.map((pixelId) => glowDie(pixelId)))
+  }, [activeCleanupDieType, cleanupConnectedPixelIds])
+
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,#2d2340,transparent_35%),linear-gradient(180deg,#17121d_0%,#0e0b12_100%)] px-4 py-5 text-[#f7ead4] md:px-8 md:py-8">
       <div className="mx-auto max-w-6xl">
@@ -173,7 +258,7 @@ export default function SettingsScreen() {
               <div>
                 <h2 className="text-sm text-[#f7ead4]">Connected Dice</h2>
                 <p className="mt-2 text-[9px] leading-relaxed text-[#c5b7d8]">
-                  Use this screen to verify BLE pairing and recent roll events before formula work.
+                  Use this screen to verify BLE pairing and manage connected dice before formula work.
                 </p>
               </div>
 
@@ -283,34 +368,54 @@ export default function SettingsScreen() {
 
           <div className="space-y-6">
             <section className="border-2 border-[#8a72a8] bg-[#15111a] p-4 shadow-[6px_6px_0_0_#09070d]">
-              <h2 className="text-sm text-[#f7ead4]">Recent Roll Events</h2>
+              <h2 className="text-sm text-[#f7ead4]">Cleanup</h2>
               <p className="mt-2 text-[9px] leading-relaxed text-[#c5b7d8]">
-                Live event feed for validating that connected dice are reporting settled rolls.
+                Enable one die type to keep reconnecting remembered dice of that type and keep them glowing until they disconnect.
               </p>
 
-              {recentRolls.length === 0 ? (
+              {CLEANUP_DIE_ORDER.length === 0 ? (
                 <div className="mt-4 border-2 border-dashed border-[#5d4a7a] bg-[#1b1522] px-4 py-8 text-center text-[10px] leading-relaxed text-[#c5b7d8]">
-                  No recent rolls detected yet
+                  No cleanup types available
                 </div>
               ) : (
-                <ol className="mt-4 space-y-3">
-                  {recentRolls.map((roll) => (
-                    <li
-                      key={roll.id}
-                      className="flex items-start justify-between gap-4 border-2 border-[#5d4a7a] bg-[#1b1522] px-3 py-3 shadow-[4px_4px_0_0_#09070d]"
-                    >
-                      <div>
-                        <p className="text-[10px] text-[#f7ead4]">
-                          {displayDieType(roll.dieType)} rolled {roll.face}
-                        </p>
-                        <p className="mt-2 text-[9px] text-[#c5b7d8]">Pixel …{roll.pixelId.slice(-4)}</p>
-                      </div>
-                      <p className="text-[9px] text-[#c5b7d8]">
-                        {formatDistanceToNow(roll.rolledAt, { addSuffix: true })}
-                      </p>
-                    </li>
-                  ))}
-                </ol>
+                <ul className="mt-4 space-y-3">
+                  {CLEANUP_DIE_ORDER.map((dieType) => {
+                    const isActive = activeCleanupDieType === dieType
+                    const connectedCount = pixelEntries.filter(
+                      (pixel) => pixel.connectionState === 'connected' && pixel.dieType === dieType,
+                    ).length
+                    const rememberedCount = Object.values(pairedPixels).filter((pixel) => pixel.dieType === dieType).length
+
+                    return (
+                      <li
+                        key={dieType}
+                        className="flex items-center justify-between gap-4 border-2 border-[#5d4a7a] bg-[#1b1522] px-3 py-3 shadow-[4px_4px_0_0_#09070d]"
+                      >
+                        <div className="flex items-center gap-3">
+                          <DieIcon dieType={dieType} className="h-10 w-10 text-[#fff0bf]" />
+                          <div>
+                            <p className="text-[10px] text-[#f7ead4]">{displayDieType(dieType)} cleanup</p>
+                            <p className="mt-2 text-[9px] text-[#c5b7d8]">
+                              Connected: {connectedCount} · Remembered: {rememberedCount}
+                            </p>
+                          </div>
+                        </div>
+
+                        <label className="flex items-center gap-3 text-[10px] text-[#f7ead4]">
+                          <span>{isActive ? 'On' : 'Off'}</span>
+                          <input
+                            type="checkbox"
+                            role="switch"
+                            aria-label={`${displayDieType(dieType)} cleanup`}
+                            checked={isActive}
+                            onChange={() => setActiveCleanupDieType((current) => (current === dieType ? null : dieType))}
+                            className="h-5 w-5 accent-[#86efac]"
+                          />
+                        </label>
+                      </li>
+                    )
+                  })}
+                </ul>
               )}
             </section>
           </div>

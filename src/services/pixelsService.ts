@@ -14,6 +14,8 @@ import { useAppStore } from '../stores/useAppStore'
 
 const ROLL_DEDUP_MS = 300
 const CONNECTED_GLOW_COLOR: GlowColor = { r: 34, g: 197, b: 94 }
+const MULTI_CONNECT_BATCH_SIZE = 6
+const MULTI_CONNECT_BATCH_DELAY_MS = 150
 const PERMISSION_DENIED_MESSAGE = "Bluetooth permission denied. Tap 'Connect' to try again."
 const NO_PAIRED_DICE_MESSAGE = 'No paired dice available. Connect a die first.'
 const NO_RECONNECTABLE_DICE_MESSAGE = 'No paired dice were available to reconnect.'
@@ -36,6 +38,10 @@ export interface ReconnectOptions {
 
 export interface ConnectRememberedDieOptions {
   suppressErrors?: boolean
+}
+
+export interface ConnectRememberedDiceOptions extends ConnectRememberedDieOptions {
+  continueOnError?: boolean
 }
 
 export interface GlowColor {
@@ -99,6 +105,16 @@ function toBlinkColor(color?: GlowColor): Color {
   }
 
   return Color.fromBytes(color.r, color.g, color.b)
+}
+
+function delay(ms: number): Promise<void> {
+  if (ms <= 0) {
+    return Promise.resolve()
+  }
+
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms)
+  })
 }
 
 export function getBleUnavailableMessage(
@@ -197,7 +213,7 @@ export class PixelsService {
 
     try {
       const pixels = await requestPixels()
-      await Promise.all(pixels.map((pixel) => this.connectRegisteredPixel(pixel)))
+      await this.connectPixelsInBatches(pixels)
     } catch (error) {
       this.store.getState().setBleError(toErrorMessage(error))
     }
@@ -220,29 +236,17 @@ export class PixelsService {
     const { allowPromptFallback = false, suppressFailureError = false } = options
     const capabilities = getBluetoothCapabilities()
 
-    let reconnectedCount = 0
-
-    for (const pixelId of pairedPixelIds) {
-      try {
-        const pixel = await getPixel(pixelId)
-        if (!pixel) {
-          continue
-        }
-
-        const connected = await this.connectRegisteredPixel(pixel)
-        if (connected) {
-          reconnectedCount += 1
-        }
-      } catch {
-        // Continue trying the remaining paired dice.
-      }
-    }
+    const reconnectResults = await this.connectRememberedDice(pairedPixelIds, {
+      suppressErrors: true,
+      continueOnError: true,
+    })
+    const reconnectedCount = reconnectResults.filter(Boolean).length
 
     if (reconnectedCount === 0) {
       if (allowPromptFallback && !capabilities.persistentPermissions) {
         try {
           const pixels = await requestPixels()
-          await Promise.all(pixels.map((pixel) => this.connectRegisteredPixel(pixel)))
+          await this.connectPixelsInBatches(pixels)
           return
         } catch (error) {
           if (!suppressFailureError) {
@@ -275,6 +279,10 @@ export class PixelsService {
     }
   }
 
+  async disconnectDice(pixelIds: string[]): Promise<void> {
+    await this.runInBatches(pixelIds, (pixelId) => this.disconnectDie(pixelId))
+  }
+
   async forgetDie(pixelId: string): Promise<void> {
     await this.disconnectDie(pixelId)
     this.store.getState().forgetPairedPixelId(pixelId)
@@ -296,6 +304,32 @@ export class PixelsService {
 
       return false
     }
+  }
+
+  async connectRememberedDice(
+    pixelIds: string[],
+    options: ConnectRememberedDiceOptions = {},
+  ): Promise<boolean[]> {
+    return this.runInBatches(pixelIds, async (pixelId) => {
+      try {
+        const pixel = await getPixel(pixelId)
+        if (!pixel) {
+          return false
+        }
+
+        return await this.connectRegisteredPixel(pixel)
+      } catch (error) {
+        if (!options.suppressErrors) {
+          this.store.getState().setBleError(toErrorMessage(error))
+        }
+
+        if (!options.continueOnError) {
+          throw error
+        }
+
+        return false
+      }
+    })
   }
 
   markPixelUsed(pixelId: string, usedAt = Date.now()): void {
@@ -361,6 +395,29 @@ export class PixelsService {
     await pixel.blink(toBlinkColor(CONNECTED_GLOW_COLOR)).catch(() => undefined)
 
     return true
+  }
+
+  private async connectPixelsInBatches(pixels: Pixel[]): Promise<boolean[]> {
+    return this.runInBatches(pixels, (pixel) => this.connectRegisteredPixel(pixel))
+  }
+
+  private async runInBatches<T, TResult>(
+    items: T[],
+    worker: (item: T) => Promise<TResult>,
+  ): Promise<TResult[]> {
+    const results: TResult[] = []
+
+    for (let index = 0; index < items.length; index += MULTI_CONNECT_BATCH_SIZE) {
+      const batch = items.slice(index, index + MULTI_CONNECT_BATCH_SIZE)
+      const batchResults = await Promise.all(batch.map((item) => worker(item)))
+      results.push(...batchResults)
+
+      if (index + MULTI_CONNECT_BATCH_SIZE < items.length) {
+        await delay(MULTI_CONNECT_BATCH_DELAY_MS)
+      }
+    }
+
+    return results
   }
 
   private registerPixel(pixelId: string, pixel: Pixel, dieType: DieType): void {
@@ -451,6 +508,10 @@ export async function disconnectDie(pixelId: string): Promise<void> {
   await pixelsService.disconnectDie(pixelId)
 }
 
+export async function disconnectDice(pixelIds: string[]): Promise<void> {
+  await pixelsService.disconnectDice(pixelIds)
+}
+
 export async function forgetDie(pixelId: string): Promise<void> {
   await pixelsService.forgetDie(pixelId)
 }
@@ -460,6 +521,13 @@ export async function connectRememberedDie(
   options?: ConnectRememberedDieOptions,
 ): Promise<boolean> {
   return pixelsService.connectRememberedDie(pixelId, options)
+}
+
+export async function connectRememberedDice(
+  pixelIds: string[],
+  options?: ConnectRememberedDiceOptions,
+): Promise<boolean[]> {
+  return pixelsService.connectRememberedDice(pixelIds, options)
 }
 
 export function markPixelUsed(pixelId: string, usedAt?: number): void {

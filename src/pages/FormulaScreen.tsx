@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Navigate, useBlocker, useLocation, useNavigate, useParams, type BlockerFunction } from 'react-router-dom'
 import { evaluateFormula, extractRequiredDice, formulaToPickerState, parseFormula } from '../services/formulaParser'
-import { connectRememberedDie, disconnectDie, glowDie, markPixelUsed, onRollResult, stopAllGlows } from '../services/pixelsService'
+import { connectRememberedDice, disconnectDice, glowDie, markPixelUsed, onRollResult, stopAllGlows } from '../services/pixelsService'
 import { useAppStore, type RememberedPixelEntry } from '../stores/useAppStore'
 import type { DieRollResult, DieType, EvaluationResult, ParsedFormula } from '../types/formula'
 import DieIcon from '../components/DieIcon'
@@ -10,6 +10,7 @@ import DieResultChip from '../components/DieResultChip'
 const DIE_ORDER: DieType[] = ['d4', 'd6', 'd8', 'd10', 'd12', 'd20', 'd100']
 const DISPLAY_DIE_ORDER: DieType[] = [...DIE_ORDER].reverse() as DieType[]
 const FORMULA_ROLL_TRANSITION_DELAY_MS = 900
+const ROLL_GLOW_REPEAT_MS = 5_000
 const REMEMBERED_DICE_RETRY_INTERVAL_MS = 2_000
 
 type KeepMode = 'kh' | 'kl'
@@ -562,6 +563,55 @@ function getPendingGlowPixelIds(rollSession: RollSession, connectedPixels: Conne
   )
 }
 
+function assignPendingBlePixelIds(
+  slots: RollSlot[],
+  connectedPixels: ConnectedPixel[],
+): { slots: RollSlot[]; changed: boolean } {
+  const assignments = new Map<string, string | null>()
+
+  for (const dieType of DIE_ORDER) {
+    const pendingSlots = slots.filter(
+      (slot) => slot.face === null && slot.source === 'ble' && slot.dieType === dieType,
+    )
+
+    if (pendingSlots.length === 0) {
+      continue
+    }
+
+    const matchingPixels = connectedPixels.filter((pixel) => pixel.dieType === dieType)
+    const assignedPixels =
+      matchingPixels.length === 0
+        ? []
+        : matchingPixels.length === 1
+          ? Array.from({ length: pendingSlots.length }, () => matchingPixels[0])
+          : pickRandomPixels(matchingPixels, Math.min(pendingSlots.length, matchingPixels.length))
+
+    for (const [index, slot] of pendingSlots.entries()) {
+      assignments.set(slot.id, assignedPixels[index]?.pixelId ?? null)
+    }
+  }
+
+  let changed = false
+  const nextSlots = slots.map((slot) => {
+    if (slot.face !== null || slot.source !== 'ble') {
+      return slot
+    }
+
+    const pixelId = assignments.get(slot.id) ?? null
+    if (slot.pixelId === pixelId) {
+      return slot
+    }
+
+    changed = true
+    return {
+      ...slot,
+      pixelId,
+    }
+  })
+
+  return { slots: nextSlots, changed }
+}
+
 function getRememberedPixelsByDieType(rememberedPixels: Record<string, RememberedPixelEntry>): Map<DieType, RememberedPixelEntry[]> {
   const rememberedByDieType = new Map<DieType, RememberedPixelEntry[]>()
 
@@ -774,6 +824,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
   const pendingGlowPromptTimeoutRef = useRef<number | null>(null)
   const queuedGlowPixelIdsRef = useRef<Set<string>>(new Set())
   const availabilitySyncInFlightRef = useRef(false)
+  const [glowPauseUntil, setGlowPauseUntil] = useState<number | null>(null)
   const [autoHideRemainingMs, setAutoHideRemainingMs] = useState<number | null>(null)
   const [rollOnlyAutoHideExpired, setRollOnlyAutoHideExpired] = useState(false)
 
@@ -989,6 +1040,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
 
   const completeRollSession = useCallback(async (nextSession: RollSession) => {
     clearPendingGlowPrompt()
+    setGlowPauseUntil(null)
 
     const result = evaluateFormula(nextSession.parsedFormula, toEvaluatedRolls(nextSession.slots))
     const formulaName = name.trim()
@@ -1157,7 +1209,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
 
     setManualInputs({})
     setRollSession(nextSession)
-  markAssignedPixelsUsed(slots)
+    markAssignedPixelsUsed(slots)
 
     const pixelIdsToGlow = getGlowPixelIdsForSlots(slots, connectedPixels)
 
@@ -1166,6 +1218,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
 
   const handleCancelRoll = async () => {
     clearPendingGlowPrompt()
+    setGlowPauseUntil(null)
     await stopAllGlows()
     setManualInputs({})
     setRollSession(null)
@@ -1377,8 +1430,6 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     }
 
     return onRollResult((_pixelId, face, dieType) => {
-      const pixelsToGlow = new Set<string>()
-
       setRollSession((current) => {
         if (!current || current.result) {
           return current
@@ -1411,24 +1462,13 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
           statusMessage: null,
         }
 
-        const pendingSameDieTypeSlots = nextSlots.filter(
-          (slot) => slot.face === null && slot.source === 'ble' && slot.dieType === dieType,
-        )
-
-        if (pendingSameDieTypeSlots.length > 0) {
-          for (const pixelId of getGlowPixelIdsForSlots(pendingSameDieTypeSlots, connectedPixels)) {
-            pixelsToGlow.add(pixelId)
-          }
-        }
-
         return nextSession
       })
 
-      if (pixelsToGlow.size > 0) {
-        scheduleGlowPrompt(pixelsToGlow)
-      }
+      clearPendingGlowPrompt()
+      setGlowPauseUntil(Date.now() + ROLL_GLOW_REPEAT_MS)
     })
-  }, [completeRollSession, connectedPixels, isAwaitingRolls, scheduleGlowPrompt])
+  }, [clearPendingGlowPrompt, isAwaitingRolls])
 
   useEffect(() => {
     if (!isAwaitingRolls || !rollSession || rollSession.result !== null) {
@@ -1470,14 +1510,18 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
           return
         }
 
-        await Promise.allSettled(plan.disconnectIds.map((pixelId) => disconnectDie(pixelId)))
+        await disconnectDice(plan.disconnectIds)
 
-        for (const pixelId of plan.connectIds) {
-          if (cancelled) {
-            break
-          }
+        if (!cancelled) {
+          await connectRememberedDice(plan.connectIds, {
+            suppressErrors: true,
+            continueOnError: true,
+          })
+        }
 
-          await connectRememberedDie(pixelId, { suppressErrors: true })
+        const pendingGlowPixelIds = getPendingGlowPixelIds(rollSession, connectedPixels)
+        if (!cancelled && pendingGlowPixelIds.length > 0) {
+          scheduleGlowPrompt(pendingGlowPixelIds)
         }
 
         if (!cancelled) {
@@ -1505,7 +1549,72 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       cancelled = true
       window.clearInterval(intervalId)
     }
-  }, [connectedPixels, isAwaitingRolls, pairedPixels, rollSession])
+  }, [connectedPixels, isAwaitingRolls, pairedPixels, rollSession, scheduleGlowPrompt])
+
+  useEffect(() => {
+    if (!isAwaitingRolls) {
+      return
+    }
+
+    let pixelIdsToGlow: string[] = []
+
+    setRollSession((current) => {
+      if (!current || current.result !== null) {
+        return current
+      }
+
+      const reassigned = assignPendingBlePixelIds(current.slots, connectedPixels)
+      pixelIdsToGlow = getGlowPixelIdsForSlots(
+        reassigned.slots.filter((slot) => slot.face === null && slot.source === 'ble'),
+        connectedPixels,
+      )
+
+      if (!reassigned.changed) {
+        return current
+      }
+
+      return {
+        ...current,
+        slots: reassigned.slots,
+      }
+    })
+
+    if (pixelIdsToGlow.length > 0) {
+      scheduleGlowPrompt(pixelIdsToGlow)
+    }
+  }, [connectedPixels, isAwaitingRolls, scheduleGlowPrompt])
+
+  useEffect(() => {
+    if (!isAwaitingRolls || !rollSession || rollSession.result !== null) {
+      return
+    }
+
+    const pendingGlowPixelIds = getPendingGlowPixelIds(rollSession, connectedPixels)
+    if (pendingGlowPixelIds.length === 0) {
+      return
+    }
+
+    const now = Date.now()
+
+    if (glowPauseUntil !== null && glowPauseUntil > now) {
+      const timeoutId = window.setTimeout(() => {
+        setGlowPauseUntil(null)
+        void handlePromptPendingDice()
+      }, glowPauseUntil - now)
+
+      return () => {
+        window.clearTimeout(timeoutId)
+      }
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void handlePromptPendingDice()
+    }, ROLL_GLOW_REPEAT_MS)
+
+    return () => {
+      window.clearTimeout(timeoutId)
+    }
+  }, [connectedPixels, glowPauseUntil, handlePromptPendingDice, isAwaitingRolls, rollSession])
 
   useEffect(() => {
     if (!isAwaitingRolls) {

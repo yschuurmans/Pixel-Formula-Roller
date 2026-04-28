@@ -330,6 +330,120 @@ describe('pixelsService', () => {
     expect(useAppStore.getState().pixels['pixel-b']?.connectionState).toBe('connected')
   })
 
+  it('reconnects paired dice in batches instead of one by one', async () => {
+    vi.useFakeTimers()
+
+    const deferredResolves = new Map<string, () => void>()
+    const createDeferred = (pixelId: string) =>
+      new Promise<undefined>((resolve) => {
+        deferredResolves.set(pixelId, () => resolve(undefined))
+      })
+
+    const pixelIds = ['pixel-a', 'pixel-b', 'pixel-c', 'pixel-d', 'pixel-e', 'pixel-f', 'pixel-g']
+    const pixelsById = new Map(
+      pixelIds.map((pixelId, index) => [
+        pixelId,
+        new FakePixel({
+          systemId: pixelId,
+          dieType: (['d4', 'd6', 'd8', 'd10', 'd12', 'd20', 'd6'] as const)[index],
+        }),
+      ]),
+    )
+
+    useAppStore.setState({ pairedPixelIds: pixelIds })
+    getPixelMock.mockImplementation(async (pixelId: string) => pixelsById.get(pixelId))
+    repeatConnectMock.mockImplementation((pixel: FakePixel) => createDeferred(pixel.systemId))
+
+    const service = new PixelsService(useAppStore)
+    const reconnectPromise = service.reconnectPairedDice()
+
+    await Promise.resolve()
+
+    expect(repeatConnectMock).toHaveBeenCalledTimes(6)
+    expect(repeatConnectMock).not.toHaveBeenCalledWith(pixelsById.get('pixel-g'))
+
+    for (const pixelId of pixelIds.slice(0, 6)) {
+      deferredResolves.get(pixelId)?.()
+    }
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(150)
+
+    expect(repeatConnectMock).toHaveBeenCalledWith(pixelsById.get('pixel-g'))
+
+    deferredResolves.get('pixel-g')?.()
+    await reconnectPromise
+  })
+
+  it('disconnects dice in batches instead of one by one', async () => {
+    vi.useFakeTimers()
+
+    const deferredResolves = new Map<string, () => void>()
+    const createDeferred = (pixelId: string) =>
+      new Promise<undefined>((resolve) => {
+        deferredResolves.set(pixelId, () => resolve(undefined))
+      })
+
+    const pixelIds = ['pixel-a', 'pixel-b', 'pixel-c', 'pixel-d', 'pixel-e', 'pixel-f', 'pixel-g']
+    const pixelsById = new Map(
+      pixelIds.map((pixelId, index) => [
+        pixelId,
+        new FakePixel({
+          systemId: pixelId,
+          dieType: (['d4', 'd6', 'd8', 'd10', 'd12', 'd20', 'd6'] as const)[index],
+        }),
+      ]),
+    )
+
+    for (const pixelId of pixelIds) {
+      pixelsById.get(pixelId)?.disconnect.mockImplementation(() => createDeferred(pixelId))
+    }
+
+    const service = new PixelsService(useAppStore)
+    for (const pixelId of pixelIds) {
+      const pixel = pixelsById.get(pixelId)
+      if (pixel) {
+        ;(service as unknown as { pixels: Map<string, FakePixel> }).pixels.set(pixelId, pixel)
+      }
+    }
+    useAppStore.setState({
+      pixels: Object.fromEntries(
+        pixelIds.map((pixelId) => {
+          const pixel = pixelsById.get(pixelId)!
+          return [
+            pixelId,
+            {
+              pixelId,
+              dieType: pixel.dieType as 'd4' | 'd6' | 'd8' | 'd10' | 'd12' | 'd20',
+              connectionState: 'connected' as const,
+              batteryLevel: null,
+              lastFace: null,
+            },
+          ]
+        }),
+      ),
+    })
+
+    const disconnectPromise = service.disconnectDice(pixelIds)
+
+    await Promise.resolve()
+
+    for (const pixelId of pixelIds.slice(0, 6)) {
+      expect(pixelsById.get(pixelId)?.disconnect).toHaveBeenCalledTimes(1)
+    }
+    expect(pixelsById.get('pixel-g')?.disconnect).not.toHaveBeenCalled()
+
+    for (const pixelId of pixelIds.slice(0, 6)) {
+      deferredResolves.get(pixelId)?.()
+    }
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(150)
+
+    expect(pixelsById.get('pixel-g')?.disconnect).toHaveBeenCalledTimes(1)
+
+    deferredResolves.get('pixel-g')?.()
+    await disconnectPromise
+  })
+
   it('forgets a die so it is removed from reconnect memory', async () => {
     const pixel = new FakePixel({ systemId: 'pixel-5', dieType: 'd8' })
     requestPixelsMock.mockResolvedValue([pixel])

@@ -5,38 +5,34 @@ import SettingsScreen from '../SettingsScreen'
 import { useAppStore } from '../../stores/useAppStore'
 
 const {
+  connectRememberedDiceMock,
   connectDieMock,
   disconnectDieMock,
   forgetDieMock,
   getBleUnavailableMessageMock,
   glowDieMock,
   reconnectPairedDiceMock,
-  unsubscribeMock,
+  stopGlowMock,
 } = vi.hoisted(() => ({
+  connectRememberedDiceMock: vi.fn(),
   connectDieMock: vi.fn(),
   disconnectDieMock: vi.fn(),
   forgetDieMock: vi.fn(),
   getBleUnavailableMessageMock: vi.fn(() => 'Bluetooth is unavailable in this Android build because the native Pixels BLE bridge is not implemented yet.'),
   glowDieMock: vi.fn(),
   reconnectPairedDiceMock: vi.fn(),
-  unsubscribeMock: vi.fn(),
+  stopGlowMock: vi.fn(),
 }))
 
-let rollCallback:
-  | ((pixelId: string, face: number, dieType: 'd4' | 'd6' | 'd8' | 'd10' | 'd12' | 'd20' | 'd100') => void)
-  | undefined
-
 vi.mock('../../services/pixelsService', () => ({
+  connectRememberedDice: connectRememberedDiceMock,
   connectDie: connectDieMock,
   disconnectDie: disconnectDieMock,
   forgetDie: forgetDieMock,
   getBleUnavailableMessage: getBleUnavailableMessageMock,
   glowDie: glowDieMock,
   reconnectPairedDice: reconnectPairedDiceMock,
-  onRollResult: vi.fn((callback: typeof rollCallback) => {
-    rollCallback = callback
-    return unsubscribeMock
-  }),
+  stopGlow: stopGlowMock,
 }))
 
 function LocationDisplay() {
@@ -70,6 +66,7 @@ function resetStore() {
     rollHistory: [],
     settings: { theme: 'dark' },
     pairedPixelIds: [],
+    pairedPixels: {},
     bleAvailable: true,
     bleError: null,
     pixels: {},
@@ -79,14 +76,14 @@ function resetStore() {
 describe('SettingsScreen', () => {
   beforeEach(() => {
     resetStore()
+    connectRememberedDiceMock.mockReset()
     connectDieMock.mockReset()
     disconnectDieMock.mockReset()
     forgetDieMock.mockReset()
     glowDieMock.mockReset()
     getBleUnavailableMessageMock.mockClear()
     reconnectPairedDiceMock.mockReset()
-    unsubscribeMock.mockReset()
-    rollCallback = undefined
+    stopGlowMock.mockReset()
     vi.useRealTimers()
   })
 
@@ -207,18 +204,102 @@ describe('SettingsScreen', () => {
     expect(glowDieMock).toHaveBeenCalledWith('pixel-4321')
   })
 
-  it('shows recent roll events from the Pixels service subscription', () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-04-27T12:00:00.000Z'))
-    renderSettingsScreen()
-
-    act(() => {
-      rollCallback?.('pixel-9876', 14, 'd20')
+  it('renders cleanup toggles and keeps only one active at a time', async () => {
+    useAppStore.setState({
+      pairedPixels: {
+        'pixel-d6-a': {
+          pixelId: 'pixel-d6-a',
+          dieType: 'd6',
+          lastUsedAt: 10,
+        },
+        'pixel-d20-a': {
+          pixelId: 'pixel-d20-a',
+          dieType: 'd20',
+          lastUsedAt: 20,
+        },
+      },
+      pixels: {
+        'pixel-d6-live': {
+          pixelId: 'pixel-d6-live',
+          dieType: 'd6',
+          connectionState: 'connected',
+          batteryLevel: 80,
+          lastFace: null,
+        },
+      },
     })
 
-    expect(screen.getByText('d20 rolled 14')).toBeInTheDocument()
-    expect(screen.getByText('Pixel …9876')).toBeInTheDocument()
-    expect(screen.getByText('less than a minute ago')).toBeInTheDocument()
-    expect(useAppStore.getState().rollHistory).toHaveLength(0)
+    renderSettingsScreen()
+
+    const d6Toggle = screen.getByRole('switch', { name: 'd6 cleanup' })
+    const d20Toggle = screen.getByRole('switch', { name: 'd20 cleanup' })
+
+    await act(async () => {
+      fireEvent.click(d6Toggle)
+    })
+
+    expect(d6Toggle).toBeChecked()
+    expect(d20Toggle).not.toBeChecked()
+    expect(connectRememberedDiceMock).toHaveBeenCalledWith(['pixel-d6-a'], {
+      suppressErrors: true,
+      continueOnError: true,
+    })
+    expect(glowDieMock).toHaveBeenCalledWith('pixel-d6-live')
+
+    await act(async () => {
+      fireEvent.click(d20Toggle)
+    })
+
+    expect(d6Toggle).not.toBeChecked()
+    expect(d20Toggle).toBeChecked()
+    expect(stopGlowMock).toHaveBeenCalledWith('pixel-d6-live')
+  })
+
+  it('repeats cleanup reconnects and glow for the active die type', async () => {
+    vi.useFakeTimers()
+
+    useAppStore.setState({
+      pairedPixels: {
+        'pixel-d6-a': {
+          pixelId: 'pixel-d6-a',
+          dieType: 'd6',
+          lastUsedAt: 10,
+        },
+      },
+      pixels: {
+        'pixel-d6-live': {
+          pixelId: 'pixel-d6-live',
+          dieType: 'd6',
+          connectionState: 'connected',
+          batteryLevel: 80,
+          lastFace: null,
+        },
+      },
+    })
+
+    renderSettingsScreen()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('switch', { name: 'd6 cleanup' }))
+      await Promise.resolve()
+    })
+
+    expect(connectRememberedDiceMock).toHaveBeenCalledTimes(1)
+    expect(glowDieMock).toHaveBeenCalledWith('pixel-d6-live')
+
+    connectRememberedDiceMock.mockClear()
+    glowDieMock.mockClear()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000)
+    })
+
+    expect(glowDieMock).toHaveBeenCalledWith('pixel-d6-live')
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000)
+    })
+
+    expect(connectRememberedDiceMock).toHaveBeenCalledTimes(1)
   })
 })

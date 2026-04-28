@@ -13,6 +13,7 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 
+
 function Set-DeployEnvironment {
     param(
         [string]$ResolvedJavaHome,
@@ -84,7 +85,7 @@ switch ($Mode) {
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
             if ([string]::IsNullOrWhiteSpace($DeviceId)) {
-                & npx cap run android
+                & npx cap run android --target 'RFCWA1BTTRD'
             }
             else {
                 & npx cap run android --target $DeviceId

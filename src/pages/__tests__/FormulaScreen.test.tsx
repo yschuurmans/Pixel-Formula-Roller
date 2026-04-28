@@ -6,15 +6,15 @@ import MainScreen from '../MainScreen'
 import { useAppStore } from '../../stores/useAppStore'
 
 const {
-  mockConnectRememberedDie,
-  mockDisconnectDie,
+  mockConnectRememberedDice,
+  mockDisconnectDice,
   mockGlowDie,
   mockMarkPixelUsed,
   mockOnRollResult,
   mockStopAllGlows,
 } = vi.hoisted(() => ({
-  mockConnectRememberedDie: vi.fn(() => Promise.resolve(true)),
-  mockDisconnectDie: vi.fn(() => Promise.resolve()),
+  mockConnectRememberedDice: vi.fn(() => Promise.resolve([true])),
+  mockDisconnectDice: vi.fn(() => Promise.resolve()),
   mockGlowDie: vi.fn(() => Promise.resolve()),
   mockMarkPixelUsed: vi.fn(),
   mockOnRollResult: vi.fn(),
@@ -27,8 +27,8 @@ let rollCallback:
 const scrollIntoViewMock = vi.fn()
 
 vi.mock('../../services/pixelsService', () => ({
-  connectRememberedDie: mockConnectRememberedDie,
-  disconnectDie: mockDisconnectDie,
+  connectRememberedDice: mockConnectRememberedDice,
+  disconnectDice: mockDisconnectDice,
   glowDie: mockGlowDie,
   markPixelUsed: mockMarkPixelUsed,
   onRollResult: mockOnRollResult.mockImplementation((callback: typeof rollCallback) => {
@@ -133,8 +133,8 @@ describe('FormulaScreen', () => {
     mockBlocker.state = 'unblocked'
     mockBlocker.proceed.mockReset()
     mockBlocker.reset.mockReset()
-    mockConnectRememberedDie.mockClear()
-    mockDisconnectDie.mockClear()
+    mockConnectRememberedDice.mockClear()
+    mockDisconnectDice.mockClear()
     mockGlowDie.mockClear()
     mockMarkPixelUsed.mockClear()
     mockOnRollResult.mockClear()
@@ -424,7 +424,7 @@ describe('FormulaScreen', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/')
   })
 
-  it('glows a connected die, reglowing for sequential rolls, then stops after completion', async () => {
+  it('glows a connected die, then reprompts after 5 seconds of no settled results', async () => {
     vi.useFakeTimers()
 
     useAppStore.setState({
@@ -464,7 +464,13 @@ describe('FormulaScreen', () => {
     expect(mockGlowDie).toHaveBeenCalledTimes(1)
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(900)
+      await vi.advanceTimersByTimeAsync(4_900)
+    })
+
+    expect(mockGlowDie).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100)
     })
 
     expect(mockGlowDie).toHaveBeenCalledTimes(2)
@@ -483,6 +489,72 @@ describe('FormulaScreen', () => {
       formulaString: '2d6',
       total: 7,
     })
+  })
+
+  it('pauses periodic reprompts while settled roll results are still arriving', async () => {
+    vi.useFakeTimers()
+
+    useAppStore.setState({
+      pixels: {
+        'pixel-d20-a': {
+          pixelId: 'pixel-d20-a',
+          dieType: 'd20',
+          connectionState: 'connected',
+          batteryLevel: 80,
+          lastFace: null,
+        },
+        'pixel-d20-b': {
+          pixelId: 'pixel-d20-b',
+          dieType: 'd20',
+          connectionState: 'connected',
+          batteryLevel: 75,
+          lastFace: null,
+        },
+      },
+    })
+
+    renderFormulaScreen(['/formula/new'])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add d20' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add d20' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add d20' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Roll' }))
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(mockGlowDie).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      rollCallback?.('pixel-d20-a', 18, 'd20')
+      await Promise.resolve()
+    })
+
+    mockGlowDie.mockClear()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_900)
+    })
+
+    expect(mockGlowDie).toHaveBeenCalledTimes(0)
+
+    await act(async () => {
+      rollCallback?.('pixel-d20-b', 11, 'd20')
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_900)
+    })
+
+    expect(mockGlowDie).toHaveBeenCalledTimes(0)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100)
+    })
+
+    expect(mockGlowDie).toHaveBeenCalledTimes(1)
   })
 
   it('routes missing dice to manual entry and completes after submit', async () => {
@@ -591,7 +663,12 @@ describe('FormulaScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add d6' }))
     fireEvent.click(screen.getByRole('button', { name: 'Roll' }))
 
-    await waitFor(() => expect(mockConnectRememberedDie).toHaveBeenCalledWith('pixel-d6-memory', { suppressErrors: true }))
+    await waitFor(() =>
+      expect(mockConnectRememberedDice).toHaveBeenCalledWith(['pixel-d6-memory'], {
+        suppressErrors: true,
+        continueOnError: true,
+      }),
+    )
     expect(screen.queryByRole('button', { name: 'Submit manual rolls' })).not.toBeInTheDocument()
     expect(screen.getByText('Trying to reconnect remembered dice...')).toBeInTheDocument()
   })
@@ -639,9 +716,14 @@ describe('FormulaScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add d6' }))
     fireEvent.click(screen.getByRole('button', { name: 'Roll' }))
 
-    await waitFor(() => expect(mockDisconnectDie).toHaveBeenCalledWith('pixel-d4'))
-    await waitFor(() => expect(mockConnectRememberedDie).toHaveBeenCalledWith('pixel-d6-needed', { suppressErrors: true }))
-    expect(mockDisconnectDie).not.toHaveBeenCalledWith('pixel-d8')
+    await waitFor(() => expect(mockDisconnectDice).toHaveBeenCalledWith(['pixel-d4']))
+    await waitFor(() =>
+      expect(mockConnectRememberedDice).toHaveBeenCalledWith(['pixel-d6-needed'], {
+        suppressErrors: true,
+        continueOnError: true,
+      }),
+    )
+    expect(mockDisconnectDice).not.toHaveBeenCalledWith(['pixel-d8'])
   })
 
   it('keeps the completed result visible until roll again is pressed', async () => {
@@ -922,6 +1004,84 @@ describe('FormulaScreen', () => {
     expect(mockGlowDie).toHaveBeenCalledWith('pixel-d20-c')
     expect(mockGlowDie).not.toHaveBeenCalledWith('pixel-d20-a')
     expect(mockGlowDie).not.toHaveBeenCalledWith('pixel-d20-b')
+
+    randomSpy.mockRestore()
+  })
+
+  it('re-picks pending glow dice after the connected pool changes', async () => {
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0)
+
+    useAppStore.setState({
+      pixels: {
+        'pixel-d20-a': {
+          pixelId: 'pixel-d20-a',
+          dieType: 'd20',
+          connectionState: 'connected',
+          batteryLevel: 80,
+          lastFace: null,
+        },
+        'pixel-d20-b': {
+          pixelId: 'pixel-d20-b',
+          dieType: 'd20',
+          connectionState: 'connected',
+          batteryLevel: 75,
+          lastFace: null,
+        },
+        'pixel-d20-c': {
+          pixelId: 'pixel-d20-c',
+          dieType: 'd20',
+          connectionState: 'connected',
+          batteryLevel: 70,
+          lastFace: null,
+        },
+      },
+    })
+
+    renderFormulaScreen(['/formula/new'])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add d20' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add d20' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Roll' }))
+
+    await waitFor(() => expect(mockGlowDie).toHaveBeenCalledTimes(2))
+
+    await act(async () => {
+      useAppStore.setState({
+        pixels: {
+          'pixel-d20-a': {
+            pixelId: 'pixel-d20-a',
+            dieType: 'd20',
+            connectionState: 'connected',
+            batteryLevel: 80,
+            lastFace: null,
+          },
+          'pixel-d20-b': {
+            pixelId: 'pixel-d20-b',
+            dieType: 'd20',
+            connectionState: 'connected',
+            batteryLevel: 75,
+            lastFace: null,
+          },
+          'pixel-d20-d': {
+            pixelId: 'pixel-d20-d',
+            dieType: 'd20',
+            connectionState: 'connected',
+            batteryLevel: 70,
+            lastFace: null,
+          },
+        },
+      })
+      await Promise.resolve()
+    })
+
+    mockGlowDie.mockClear()
+
+    fireEvent.click(screen.getByRole('button', { name: 'd20 #1 pending' }))
+
+    await waitFor(() => expect(mockGlowDie).toHaveBeenCalledTimes(2))
+    expect(mockGlowDie).toHaveBeenCalledWith('pixel-d20-b')
+    expect(mockGlowDie).toHaveBeenCalledWith('pixel-d20-d')
+    expect(mockGlowDie).not.toHaveBeenCalledWith('pixel-d20-c')
 
     randomSpy.mockRestore()
   })
