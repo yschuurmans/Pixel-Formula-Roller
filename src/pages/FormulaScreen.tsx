@@ -9,7 +9,7 @@ import {
   onRollResult,
   stopAllGlows,
 } from '../services/pixelsService'
-import { nativeLog } from '../services/pixelsTransport'
+import { nativeLog, onNativeNotification } from '../services/pixelsTransport'
 import { useAppStore, type RememberedPixelEntry } from '../stores/useAppStore'
 import type { DieRollResult, DieType, EvaluationResult, ParsedFormula } from '../types/formula'
 import DieIcon from '../components/DieIcon'
@@ -19,6 +19,10 @@ const DIE_ORDER: DieType[] = ['d4', 'd6', 'd8', 'd10', 'd12', 'd20', 'd100']
 const DISPLAY_DIE_ORDER: DieType[] = [...DIE_ORDER].reverse() as DieType[]
 const FORMULA_ROLL_TRANSITION_DELAY_MS = 1200
 const ROLL_GLOW_REPEAT_MS = 2_000
+// How long we consider a die to be 'rolling' after a roll event before
+// allowing reprompts to resume. While any die is within this window we
+// suspend periodic blinking for pending dice.
+const ROLL_ROLLING_HOLD_MS = 2_000
 const REMEMBERED_DICE_RETRY_INTERVAL_MS = 2_000
 const MAX_CONNECTED = 12
 
@@ -713,8 +717,14 @@ function buildAvailabilityPlan(
       (pixel) => !connectedPixelIds.has(pixel.pixelId),
     )
 
-    for (const rememberedPixel of availableRemembered.slice(0, missingCount)) {
-      connectCandidates.push(rememberedPixel.pixelId)
+    // If we need any additional dice of this type, attempt to connect to
+    // all known remembered dice for that type. The UI may only prompt a
+    // subset to glow, but connecting to all known dice improves chances of
+    // obtaining the required results (and allows un-blinking dice to roll).
+    if (availableRemembered.length > 0) {
+      for (const rememberedPixel of availableRemembered) {
+        connectCandidates.push(rememberedPixel.pixelId)
+      }
     }
   }
 
@@ -855,6 +865,8 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
   const availabilityConnectAttemptedRef = useRef(false)
   const lastSyncRollSessionRef = useRef<string | null>(null)
   const pendingReconnectInFlightRef = useRef(false)
+  const rollingTimersRef = useRef<Map<string, number>>(new Map())
+  const rollingExpiryRef = useRef<Map<string, number>>(new Map())
   const [glowPauseUntil, setGlowPauseUntil] = useState<number | null>(null)
   const [autoHideRemainingMs, setAutoHideRemainingMs] = useState<number | null>(null)
   const [rollOnlyAutoHideExpired, setRollOnlyAutoHideExpired] = useState(false)
@@ -1321,6 +1333,34 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     void attemptPendingReconnects()
   }, [clearPendingGlowPrompt, rollSession, attemptPendingReconnects])
 
+  const markPixelRolling = useCallback((pixelId: string) => {
+    const prevTimer = rollingTimersRef.current.get(pixelId)
+    if (prevTimer !== undefined) {
+      window.clearTimeout(prevTimer)
+    }
+
+    const expiry = Date.now() + ROLL_ROLLING_HOLD_MS
+    rollingExpiryRef.current.set(pixelId, expiry)
+
+    // Update global pause to the maximum expiry across rolling pixels
+    const expiries = Array.from(rollingExpiryRef.current.values())
+    const maxExpiry = expiries.length === 0 ? null : Math.max(...expiries)
+    setGlowPauseUntil(maxExpiry)
+
+    const timerId = window.setTimeout(() => {
+      rollingTimersRef.current.delete(pixelId)
+      rollingExpiryRef.current.delete(pixelId)
+      const remaining = Array.from(rollingExpiryRef.current.values())
+      const newMax = remaining.length === 0 ? null : Math.max(...remaining)
+      setGlowPauseUntil(newMax)
+      if (newMax === null) {
+        void handlePromptPendingDice()
+      }
+    }, ROLL_ROLLING_HOLD_MS)
+
+    rollingTimersRef.current.set(pixelId, timerId)
+  }, [handlePromptPendingDice])
+
   const handleManualInputChange = (slotId: string, value: string) => {
     setManualInputs((current) => ({
       ...current,
@@ -1549,9 +1589,44 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       })
 
       clearPendingGlowPrompt()
-      setGlowPauseUntil(Date.now() + ROLL_GLOW_REPEAT_MS)
+      markPixelRolling(_pixelId)
     })
-  }, [clearPendingGlowPrompt, isAwaitingRolls])
+  }, [clearPendingGlowPrompt, isAwaitingRolls, markPixelRolling])
+
+  useEffect(() => {
+    if (!isAwaitingRolls || !rollSession) return
+
+    const unsubscribe = onNativeNotification((event) => {
+      try {
+        const bytes = event.value
+        if (!bytes || bytes.length < 2) return
+
+        // BLE frames observed on the native bridge use 0x03 0x03 for
+        // intermediate rolling frames, and 0x03 0x01 for the settled result.
+        // When we see a rolling frame for a pixel involved in the current
+        // roll session, mark it as rolling so the UI pauses blinking while
+        // the physical die is still in motion.
+        if (bytes[0] === 0x03 && bytes[1] === 0x03) {
+          const pixelState = useAppStore.getState().pixels[event.systemId]
+          if (!pixelState) return
+
+          const hasPendingSlot = rollSession.slots.some(
+            (s) => s.face === null && s.source === 'ble' && s.dieType === pixelState.dieType,
+          )
+
+          if (hasPendingSlot) {
+            markPixelRolling(event.systemId)
+          }
+        }
+      } catch {
+        // best-effort
+      }
+    })
+
+    return () => {
+      unsubscribe()
+    }
+  }, [isAwaitingRolls, rollSession, markPixelRolling])
 
   useEffect(() => {
     if (!isAwaitingRolls || !rollSession || rollSession.result !== null) {

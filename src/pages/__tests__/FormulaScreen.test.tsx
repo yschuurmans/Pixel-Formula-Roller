@@ -481,7 +481,7 @@ describe('FormulaScreen', () => {
       await vi.advanceTimersByTimeAsync(100)
     })
 
-    expect(mockGlowDie.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(mockGlowDie).toHaveBeenCalledTimes(2)
 
     await act(async () => {
       rollCallback?.('pixel-d6', 2, 'd6')
@@ -562,7 +562,7 @@ describe('FormulaScreen', () => {
       await vi.advanceTimersByTimeAsync(100)
     })
 
-    expect(mockGlowDie.mock.calls.length).toBeGreaterThanOrEqual(1)
+    expect(mockGlowDie).toHaveBeenCalledTimes(1)
   })
 
   it('routes missing dice to manual entry and completes after submit', async () => {

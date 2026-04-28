@@ -68,6 +68,16 @@ const NativePixelsBle = registerPlugin<NativeBlePlugin>('PixelsBle')
 const nativePixels = new Map<string, Pixel>()
 const nativeKnownDevices = new Map<string, NativePixelDevice>()
 
+// Registry for raw native BLE notification listeners. Consumers can subscribe
+// to receive the unparsed `pixelsBleNotification` events for a specific
+// pixel `systemId` and inspect bytes to detect rolling/settling frames.
+const nativeNotificationListeners = new Set<(event: NativeBleNotificationEvent) => void>()
+
+export function onNativeNotification(listener: (event: NativeBleNotificationEvent) => void) {
+  nativeNotificationListeners.add(listener)
+  return () => nativeNotificationListeners.delete(listener)
+}
+
 type LogLevel = 'i' | 'w' | 'e' | 'd' | 'v'
 
 export function nativeLog(level: LogLevel, ...args: unknown[]) {
@@ -159,6 +169,8 @@ function toUint8Array(data: BufferSource): Uint8Array {
 class NativePixelsSession extends PixelSession {
   private disconnectHandle?: PluginListenerHandle
   private disconnectHandlePromise?: Promise<PluginListenerHandle>
+  private notificationHandle?: PluginListenerHandle
+  private notificationHandlePromise?: Promise<PluginListenerHandle>
 
   constructor(systemId: string, name?: string) {
     super(systemId, name)
@@ -172,6 +184,27 @@ class NativePixelsSession extends PixelSession {
       this.disconnectHandle = handle
       return handle
     })
+
+    // Also listen for raw notifications for this session so other modules can
+    // react to intermediate rolling frames prior to the settled roll event.
+    this.notificationHandlePromise = NativePixelsBle.addListener('pixelsBleNotification', (event) => {
+      if (event.systemId !== this.systemId) return
+
+      try {
+        for (const listener of nativeNotificationListeners) {
+          try {
+            listener(event)
+          } catch (err) {
+            // best-effort; don't let one listener blow up the rest
+          }
+        }
+      } catch {
+        // swallow
+      }
+    }).then((handle) => {
+      this.notificationHandle = handle
+      return handle
+    })
   }
 
   dispose(): void {
@@ -180,6 +213,12 @@ class NativePixelsSession extends PixelSession {
       this.disconnectHandle = undefined
     } else if (this.disconnectHandlePromise) {
       void this.disconnectHandlePromise.then((handle) => handle.remove())
+    }
+    if (this.notificationHandle) {
+      void this.notificationHandle.remove()
+      this.notificationHandle = undefined
+    } else if (this.notificationHandlePromise) {
+      void this.notificationHandlePromise.then((handle) => handle.remove())
     }
   }
 
