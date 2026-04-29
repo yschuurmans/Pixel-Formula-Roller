@@ -5,6 +5,8 @@ import {
   connectRememberedDie,
   disconnectDie,
   glowDie,
+  enqueueReconnectDuringRoll,
+  cancelAllReconnectsDuringRoll,
   onRollResult,
   stopAllGlows,
 } from '../services/pixelsService'
@@ -158,6 +160,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
   const suppressScheduledUntilRef = useRef<number | null>(null)
   const glowPauseUntilRef = useRef<number | null>(null)
   const availabilitySyncInFlightRef = useRef(false)
+  const prevPixelsRef = useRef<Record<string, { connectionState?: string }>>({})
   // Persist initial availability plans for the active roll session so we
   // don't escalate disconnects across retries.
   const availabilityInitialDisconnectRef = useRef<string[] | null>(null)
@@ -419,6 +422,11 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
 
   const completeRollSession = useCallback(async (nextSession: RollSession) => {
     clearPendingGlowPrompt()
+    // Cancel any mid-roll reconnect attempts when a roll completes
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-floating-promises
+      cancelAllReconnectsDuringRoll()
+    } catch {}
     setGlowPauseUntil(null)
     glowPauseUntilRef.current = null
 
@@ -624,6 +632,11 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     setGlowPauseUntil(null)
     glowPauseUntilRef.current = null
     await stopAllGlows()
+    // Cancel any queued reconnects when the roll is cancelled
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-floating-promises
+      cancelAllReconnectsDuringRoll()
+    } catch {}
     setManualInputs({})
     setRollSession(null)
   }
@@ -1435,6 +1448,42 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       return nextSession
     })
   }, [completeRollSession, isAwaitingRolls, pairedPixels, pixels])
+
+  // Detect when previously-connected pixels disconnect during an active
+  // roll and enqueue bounded reconnect attempts for those remembered dice.
+  useEffect(() => {
+    if (!isAwaitingRolls || !rollSession) {
+      // Keep prev snapshot in sync outside of rolls
+      prevPixelsRef.current = Object.fromEntries(
+        Object.entries(pixels).map(([id, p]) => [id, { connectionState: p.connectionState }]),
+      )
+      return
+    }
+
+    const prev = prevPixelsRef.current
+
+    for (const [pixelId, pState] of Object.entries(pixels)) {
+      const prevConn = prev[pixelId]?.connectionState ?? null
+      const curConn = pState.connectionState
+
+      if (prevConn === 'connected' && curConn === 'disconnected') {
+        const paired = pairedPixels[pixelId]
+        if (!paired) continue
+
+        const needsThisDieType = rollSession.slots.some(
+          (s) => s.face === null && s.source === 'ble' && s.dieType === paired.dieType,
+        )
+
+        if (needsThisDieType) {
+          enqueueReconnectDuringRoll(pixelId, { maxAttempts: 6, intervalMs: REMEMBERED_DICE_RETRY_INTERVAL_MS })
+        }
+      }
+    }
+
+    prevPixelsRef.current = Object.fromEntries(
+      Object.entries(pixels).map(([id, p]) => [id, { connectionState: p.connectionState }]),
+    )
+  }, [isAwaitingRolls, rollSession, pixels, pairedPixels])
 
   if (navigationIntent) {
     return (

@@ -369,6 +369,82 @@ export class PixelsService {
     })
   }
 
+  // Reconnect queue used for mid-roll reconnect attempts. Each queued
+  // pixel is retried with a bounded number of attempts and an interval
+  // to avoid hammering the native BLE stack while a roll is active.
+  private readonly reconnectDuringRollControllers = new Map<
+    string,
+    { attempts: number; active: boolean; timerId: number | null }
+  >()
+
+  public enqueueReconnectDuringRoll(pixelId: string, options?: { maxAttempts?: number; intervalMs?: number }): void {
+    const maxAttempts = options?.maxAttempts ?? 6
+    const intervalMs = options?.intervalMs ?? 2000
+
+    if (this.reconnectDuringRollControllers.has(pixelId)) {
+      // Already queued
+      return
+    }
+
+    const controller: { attempts: number; active: boolean; timerId: number | null } = { attempts: 0, active: true, timerId: null }
+    this.reconnectDuringRollControllers.set(pixelId, controller)
+
+    const attemptOnce = async () => {
+      if (!controller.active) return
+
+      // If the pixel was forgotten or is already connected, stop retrying
+      const paired = this.store.getState().pairedPixels[pixelId]
+      const currentPixelState = this.store.getState().pixels[pixelId]
+      if (!paired || currentPixelState?.connectionState === 'connected') {
+        this.cancelReconnectDuringRoll(pixelId)
+        return
+      }
+
+      controller.attempts += 1
+      nativeLog('d', '[PixelsService] reconnectDuringRoll attempt', pixelId, { attempt: controller.attempts })
+
+      try {
+        const ok = await this.connectRememberedDie(pixelId, { suppressErrors: true })
+        if (ok) {
+          nativeLog('i', '[PixelsService] reconnectDuringRoll success', pixelId)
+          this.cancelReconnectDuringRoll(pixelId)
+          return
+        }
+      } catch (e) {
+        // swallow - retries will handle continuation
+      }
+
+      if (!controller.active) return
+
+      if (controller.attempts >= maxAttempts) {
+        nativeLog('w', '[PixelsService] reconnectDuringRoll giving up', pixelId, { attempts: controller.attempts })
+        this.cancelReconnectDuringRoll(pixelId)
+        return
+      }
+
+      controller.timerId = window.setTimeout(() => void attemptOnce(), intervalMs) as unknown as number
+    }
+
+    // Kick off immediately
+    controller.timerId = window.setTimeout(() => void attemptOnce(), 0) as unknown as number
+  }
+
+  public cancelReconnectDuringRoll(pixelId: string): void {
+    const controller = this.reconnectDuringRollControllers.get(pixelId)
+    if (!controller) return
+    controller.active = false
+    if (controller.timerId !== null) {
+      window.clearTimeout(controller.timerId)
+    }
+    this.reconnectDuringRollControllers.delete(pixelId)
+  }
+
+  public cancelAllReconnectsDuringRoll(): void {
+    for (const id of Array.from(this.reconnectDuringRollControllers.keys())) {
+      this.cancelReconnectDuringRoll(id)
+    }
+  }
+
   markPixelUsed(pixelId: string, usedAt = Date.now()): void {
     this.store.getState().markPairedPixelUsed(pixelId, usedAt)
   }
@@ -960,4 +1036,16 @@ export async function stopGlow(pixelId: string): Promise<void> {
 
 export async function stopAllGlows(): Promise<void> {
   await pixelsService.stopAllGlows()
+}
+
+export function enqueueReconnectDuringRoll(pixelId: string, options?: { maxAttempts?: number; intervalMs?: number }) {
+  return pixelsService.enqueueReconnectDuringRoll(pixelId, options)
+}
+
+export function cancelReconnectDuringRoll(pixelId: string) {
+  return pixelsService.cancelReconnectDuringRoll(pixelId)
+}
+
+export function cancelAllReconnectsDuringRoll() {
+  return pixelsService.cancelAllReconnectsDuringRoll()
 }

@@ -129,7 +129,6 @@ describe('pixelsService', () => {
 
   it('marks BLE unavailable on init when the Bluetooth bridge is missing', async () => {
     const service = new PixelsService(useAppStore)
-
     await service.initializeBleSupport({
       bluetooth: undefined,
     })
@@ -496,6 +495,123 @@ describe('pixelsService', () => {
     expect(pixel.disconnect).toHaveBeenCalledTimes(1)
     expect(useAppStore.getState().pairedPixelIds).toEqual([])
     expect(useAppStore.getState().pixels['pixel-5']).toBeUndefined()
+  })
+
+  it('enqueueReconnectDuringRoll retries until success then stops retrying', async () => {
+    vi.useFakeTimers()
+
+    const service = new PixelsService(useAppStore)
+
+    // Ensure the pixel is remembered in the store so the reconnect queue
+    // will attempt reconnects instead of bailing immediately.
+    useAppStore.setState({
+      pairedPixelIds: ['pixel-retry'],
+      pairedPixels: { 'pixel-retry': { pixelId: 'pixel-retry', dieType: 'd6', lastUsedAt: Date.now() } },
+      pixels: {},
+    })
+
+    let callCount = 0
+    const spy = vi.spyOn(service as any, 'connectRememberedDie').mockImplementation(async (pixelId: string) => {
+      callCount += 1
+      // fail twice, succeed on the third attempt
+      return callCount >= 3
+    })
+
+    service.enqueueReconnectDuringRoll('pixel-retry', { maxAttempts: 6, intervalMs: 500 })
+
+    // initial immediate attempt
+    await vi.advanceTimersByTimeAsync(0)
+    await Promise.resolve()
+
+    // still queued after first failure
+    expect((service as any).reconnectDuringRollControllers.has('pixel-retry')).toBe(true)
+
+    // second attempt after 500ms
+    await vi.advanceTimersByTimeAsync(500)
+    await Promise.resolve()
+
+    // third attempt after another 500ms -> should succeed and be removed
+    await vi.advanceTimersByTimeAsync(500)
+    await Promise.resolve()
+
+    expect(spy).toHaveBeenCalledTimes(3)
+    expect((service as any).reconnectDuringRollControllers.has('pixel-retry')).toBe(false)
+
+    spy.mockRestore()
+    vi.useRealTimers()
+  })
+
+  it('enqueueReconnectDuringRoll gives up after maxAttempts', async () => {
+    vi.useFakeTimers()
+
+    const service = new PixelsService(useAppStore)
+
+    useAppStore.setState({
+      pairedPixelIds: ['pixel-giveup'],
+      pairedPixels: { 'pixel-giveup': { pixelId: 'pixel-giveup', dieType: 'd6', lastUsedAt: Date.now() } },
+      pixels: {},
+    })
+
+    const spy = vi.spyOn(service as any, 'connectRememberedDie').mockResolvedValue(false)
+
+    service.enqueueReconnectDuringRoll('pixel-giveup', { maxAttempts: 3, intervalMs: 200 })
+
+    // attempt 1
+    await vi.advanceTimersByTimeAsync(0)
+    await Promise.resolve()
+
+    // attempt 2
+    await vi.advanceTimersByTimeAsync(200)
+    await Promise.resolve()
+
+    // attempt 3
+    await vi.advanceTimersByTimeAsync(200)
+    await Promise.resolve()
+
+    // after reaching maxAttempts it should have removed the controller
+    expect(spy).toHaveBeenCalledTimes(3)
+    expect((service as any).reconnectDuringRollControllers.has('pixel-giveup')).toBe(false)
+
+    spy.mockRestore()
+    vi.useRealTimers()
+  })
+
+  it('cancelReconnectDuringRoll prevents further retries', async () => {
+    vi.useFakeTimers()
+
+    const service = new PixelsService(useAppStore)
+
+    useAppStore.setState({
+      pairedPixelIds: ['pixel-cancel'],
+      pairedPixels: { 'pixel-cancel': { pixelId: 'pixel-cancel', dieType: 'd6', lastUsedAt: Date.now() } },
+      pixels: {},
+    })
+
+    let callCount = 0
+    const spy = vi.spyOn(service as any, 'connectRememberedDie').mockImplementation(async () => {
+      callCount += 1
+      return false
+    })
+
+    service.enqueueReconnectDuringRoll('pixel-cancel', { maxAttempts: 10, intervalMs: 1000 })
+
+    // run the immediate first attempt
+    await vi.advanceTimersByTimeAsync(0)
+    await Promise.resolve()
+
+    expect(spy).toHaveBeenCalledTimes(1)
+
+    // cancel further retries
+    service.cancelReconnectDuringRoll('pixel-cancel')
+
+    // advance time a lot, no further attempts should run
+    await vi.advanceTimersByTimeAsync(10_000)
+    await Promise.resolve()
+
+    expect(spy).toHaveBeenCalledTimes(1)
+
+    spy.mockRestore()
+    vi.useRealTimers()
   })
 
   it('normalizes die types and targets correct face masks for d10 and d00', async () => {
