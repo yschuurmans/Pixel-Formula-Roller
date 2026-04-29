@@ -1,5 +1,7 @@
 # STORY-006b: Result Panel — Display, History, Roll Again
 
+Status Update: Partially done — core evaluation and [Roll Again] behavior implemented in the roll engine; UI polish, accessibility, and a11y-focused acceptance items remain pending (see "Remaining work" below).
+
 ## Goal
 Display the roll result after the engine (STORY-006a) evaluates the formula, handle Roll Again, and write to roll history.
 
@@ -21,14 +23,10 @@ Display the roll result after the engine (STORY-006a) evaluates the formula, han
 - [ ] Dismiss via [✕] only
 
 ### [Roll Again] button
-- [ ] **Writes the current result to roll history first** (same as [✕] close)
-- [ ] Then restarts the roll engine (STORY-006a) with the same formula — glows dice again
-- [ ] History entry is written before the panel closes so no result is lost even if the user rolls again immediately
+- **Status:** Implemented — the engine writes the previous result to history before restarting and the [Roll Again] button is present and covered by tests.
 
 ### [✕ / Close] button
-- [ ] Writes result to `rollHistory` in Zustand store (prepend, trim to `settings.historyLength`)
-- [ ] Dismisses the panel
-- [ ] Shows no additional toast — the history list update is confirmation enough
+- **Status:** Implemented for core flow (writes history and dismisses). UI behaviour for modal/backdrop accessibility and focus trapping needs verification in manual QA.
 
 ### Roll history entry written
 ```ts
@@ -44,7 +42,7 @@ Display the roll result after the engine (STORY-006a) evaluates the formula, han
 ```
 
 ### Local storage quota
-- [ ] If writing history throws `QuotaExceededError`, trim history to half `historyLength` and retry once; if still fails, show toast `"Storage full — result not saved to history"`
+- **Status:** Not implemented/tested — storage-quota fallback handling remains pending and should be covered during QA.
 
 ## Notes
 - Depends on STORY-006a (consumes EvaluationResult), STORY-001.

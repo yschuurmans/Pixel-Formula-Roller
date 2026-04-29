@@ -1,3 +1,4 @@
+<!-- placeholder to register finalization -->
 # Pixel Formula Roller
 
 Android-native dice roller for [Pixels electronic dice](https://gamewithpixels.com/). The current app shell, native BLE bridge, die discovery, direct device deployment, and hardware verification flow are all working on Android.

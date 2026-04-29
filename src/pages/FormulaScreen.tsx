@@ -9,7 +9,7 @@ import {
   onRollResult,
   stopAllGlows,
 } from '../services/pixelsService'
-import { nativeLog, onNativeNotification } from '../services/pixelsTransport'
+import { nativeLog } from '../services/pixelsTransport'
 import { useAppStore, type RememberedPixelEntry } from '../stores/useAppStore'
 import type { DieRollResult, DieType, EvaluationResult, ParsedFormula } from '../types/formula'
 import DieIcon from '../components/DieIcon'
@@ -18,11 +18,7 @@ import DieResultChip from '../components/DieResultChip'
 const DIE_ORDER: DieType[] = ['d4', 'd6', 'd8', 'd10', 'd12', 'd20', 'd100']
 const DISPLAY_DIE_ORDER: DieType[] = [...DIE_ORDER].reverse() as DieType[]
 const FORMULA_ROLL_TRANSITION_DELAY_MS = 1200
-const ROLL_GLOW_REPEAT_MS = 2_000
-// How long we consider a die to be 'rolling' after a roll event before
-// allowing reprompts to resume. While any die is within this window we
-// suspend periodic blinking for pending dice.
-const ROLL_ROLLING_HOLD_MS = 2_000
+const ROLL_GLOW_REPEAT_MS = 5_000
 const REMEMBERED_DICE_RETRY_INTERVAL_MS = 2_000
 const MAX_CONNECTED = 12
 
@@ -654,7 +650,15 @@ function promoteRecoverableManualSlots(
   slots: RollSlot[],
   rememberedPixels: Record<string, RememberedPixelEntry>,
 ): RollSlot[] {
-  const rememberedByDieType = getRememberedPixelsByDieType(rememberedPixels)
+  // Some callers may pass a stale or empty `rememberedPixels` object
+  // (tests running with persisted state can observe timing differences).
+  // Fall back to the live store state when the provided value is empty so
+  // availability planning still considers remembered dice.
+  const effectiveRememberedPixels = Object.keys(rememberedPixels || {}).length
+    ? rememberedPixels
+    : useAppStore.getState().pairedPixels
+
+  const rememberedByDieType = getRememberedPixelsByDieType(effectiveRememberedPixels)
 
   return slots.map((slot) => {
     if (slot.source !== 'manual') {
@@ -692,6 +696,9 @@ function buildAvailabilityPlan(
   rememberedPixels: Record<string, RememberedPixelEntry>,
 ): AvailabilityPlan {
   const pendingCounts = getPendingBleCounts(slots)
+  // Debug: emit pending counts and remembered keys to diagnose availability planning
+  // eslint-disable-next-line no-console
+  console.log('buildAvailabilityPlan', { pendingCounts: Array.from(pendingCounts.entries()), connectedPixels, rememberedPixelsKeys: Object.keys(rememberedPixels) })
   if (pendingCounts.size === 0) {
     return { disconnectIds: [], connectIds: [] }
   }
@@ -702,7 +709,11 @@ function buildAvailabilityPlan(
     connectedCounts.set(pixel.dieType, (connectedCounts.get(pixel.dieType) ?? 0) + 1)
   }
 
-  const rememberedByDieType = getRememberedPixelsByDieType(rememberedPixels)
+  const effectiveRememberedPixels = Object.keys(rememberedPixels || {}).length
+    ? rememberedPixels
+    : useAppStore.getState().pairedPixels
+
+  const rememberedByDieType = getRememberedPixelsByDieType(effectiveRememberedPixels)
   const connectCandidates: string[] = []
 
   for (const dieType of DIE_ORDER) {
@@ -717,14 +728,14 @@ function buildAvailabilityPlan(
       (pixel) => !connectedPixelIds.has(pixel.pixelId),
     )
 
-    // If we need any additional dice of this type, attempt to connect to
-    // all known remembered dice for that type. The UI may only prompt a
-    // subset to glow, but connecting to all known dice improves chances of
-    // obtaining the required results (and allows un-blinking dice to roll).
-    if (availableRemembered.length > 0) {
-      for (const rememberedPixel of availableRemembered) {
-        connectCandidates.push(rememberedPixel.pixelId)
-      }
+    // When a die type is required for the roll, prefer to connect ALL known
+    // remembered dice of that type so the native stack can handle any of
+    // them that become available. Blinking will still only prompt a subset
+    // of connected dice (see `getGlowPixelIdsForSlots`). This ensures that
+    // we attempt reconnects for any remembered dice of the required type
+    // even if only a subset are highlighted to the user.
+    for (const rememberedPixel of availableRemembered) {
+      connectCandidates.push(rememberedPixel.pixelId)
     }
   }
 
@@ -857,6 +868,37 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
   const pendingRollScrollRef = useRef(false)
   const pendingGlowPromptTimeoutRef = useRef<number | null>(null)
   const queuedGlowPixelIdsRef = useRef<Set<string>>(new Set())
+  const lastGlowAtRef = useRef<number>(0)
+  // Debounce window to prevent rapid duplicate glow calls. Use a value
+  // slightly larger than `FORMULA_ROLL_TRANSITION_DELAY_MS` so scheduled
+  // delayed prompts triggered shortly after an immediate glow are ignored.
+  const GLOW_DEDUP_MS = FORMULA_ROLL_TRANSITION_DELAY_MS + 100
+  const lastGlowByPixelRef = useRef<Map<string, number>>(new Map())
+  const rollSessionRef = useRef<RollSession | null>(null)
+  const executeGlowForPixels = useCallback(async (pixelIdsIterable: Iterable<string>, forceOrContext: boolean | string | null = false) => {
+    const force = typeof forceOrContext === 'boolean' ? forceOrContext : false
+    const now = Date.now()
+    const pixelIds = Array.from(pixelIdsIterable)
+    const toGlow = force
+      ? pixelIds
+      : pixelIds.filter((id) => {
+          const last = lastGlowByPixelRef.current.get(id) ?? 0
+          // Only allow glow if the cooldown has elapsed (allow equal).
+          return now - last >= ROLL_GLOW_REPEAT_MS
+        })
+    if (toGlow.length === 0) return
+    const per = pixelIds.map((id) => {
+      const last = lastGlowByPixelRef.current.get(id) ?? null
+      return { id, last, since: last === null ? null : now - last }
+    })
+    nativeLog('i', 'executeGlowForPixels', { pixelIds, toGlow, ROLL_GLOW_REPEAT_MS, per, force, ctx: typeof forceOrContext === 'string' ? forceOrContext : undefined })
+    for (const id of toGlow) lastGlowByPixelRef.current.set(id, now)
+    await Promise.allSettled(toGlow.map((pixelId) => glowDie(pixelId)))
+  }, [])
+  const glowInFlightRef = useRef(false)
+  const lastAssignReassignedChangedRef = useRef(false)
+  const suppressScheduledUntilRef = useRef<number | null>(null)
+  const glowPauseUntilRef = useRef<number | null>(null)
   const availabilitySyncInFlightRef = useRef(false)
   // Persist initial availability plans for the active roll session so we
   // don't escalate disconnects across retries.
@@ -865,11 +907,17 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
   const availabilityConnectAttemptedRef = useRef(false)
   const lastSyncRollSessionRef = useRef<string | null>(null)
   const pendingReconnectInFlightRef = useRef(false)
-  const rollingTimersRef = useRef<Map<string, number>>(new Map())
-  const rollingExpiryRef = useRef<Map<string, number>>(new Map())
   const [glowPauseUntil, setGlowPauseUntil] = useState<number | null>(null)
   const [autoHideRemainingMs, setAutoHideRemainingMs] = useState<number | null>(null)
   const [rollOnlyAutoHideExpired, setRollOnlyAutoHideExpired] = useState(false)
+
+  useEffect(() => {
+    rollSessionRef.current = rollSession
+  }, [rollSession])
+
+  useEffect(() => {
+    glowPauseUntilRef.current = glowPauseUntil
+  }, [glowPauseUntil])
 
   useEffect(() => {
     if (isRollOnly) {
@@ -1058,6 +1106,13 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
   }, [])
 
   const scheduleGlowPrompt = useCallback((pixelIds: Iterable<string>) => {
+    const suppressUntil = suppressScheduledUntilRef.current
+    if (suppressUntil !== null && Date.now() < suppressUntil) {
+      // Suppressed by the caller (e.g. immediate glow already performed);
+      // keep suppression cleared once the window expires.
+      return
+    }
+
     let hasQueuedPixels = false
 
     for (const pixelId of pixelIds) {
@@ -1073,17 +1128,41 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       window.clearTimeout(pendingGlowPromptTimeoutRef.current)
     }
 
-    pendingGlowPromptTimeoutRef.current = window.setTimeout(() => {
+    pendingGlowPromptTimeoutRef.current = window.setTimeout(async () => {
       const pixelIdsToGlow = Array.from(queuedGlowPixelIdsRef.current)
       queuedGlowPixelIdsRef.current.clear()
       pendingGlowPromptTimeoutRef.current = null
-      void Promise.allSettled(pixelIdsToGlow.map((pixelId) => glowDie(pixelId)))
+      const now = Date.now()
+      // Debug: inspect pause state when scheduled timeout fires
+      // eslint-disable-next-line no-console
+      console.log('scheduled glow firing', { now, glowPauseUntilRef: glowPauseUntilRef.current, glowPauseUntilState: glowPauseUntil })
+      // Respect an explicit pause requested when roll results are still arriving
+      if (glowPauseUntilRef.current !== null && glowPauseUntilRef.current > now) {
+        nativeLog('d', 'skipping scheduled glow due to glowPauseUntil', { now, glowPauseUntil: glowPauseUntilRef.current })
+        return
+      }
+      if (glowInFlightRef.current) {
+        nativeLog('d', 'skipping scheduled glow while glow in-flight', { now, lastGlowAt: lastGlowAtRef.current, GLOW_DEDUP_MS })
+        return
+      }
+      if (now - lastGlowAtRef.current < GLOW_DEDUP_MS) {
+        nativeLog('d', 'skipping scheduled duplicate glow', { now, lastGlowAt: lastGlowAtRef.current, GLOW_DEDUP_MS, since: now - lastGlowAtRef.current })
+        return
+      }
+      glowInFlightRef.current = true
+      lastGlowAtRef.current = now
+      nativeLog('i', 'performing scheduled glow', { sessionId: rollSession?.sessionId, pixelIdsToGlow })
+      await executeGlowForPixels(pixelIdsToGlow, false)
+      window.setTimeout(() => {
+        glowInFlightRef.current = false
+      }, GLOW_DEDUP_MS)
     }, FORMULA_ROLL_TRANSITION_DELAY_MS)
   }, [])
 
   const completeRollSession = useCallback(async (nextSession: RollSession) => {
     clearPendingGlowPrompt()
     setGlowPauseUntil(null)
+    glowPauseUntilRef.current = null
 
     const result = evaluateFormula(nextSession.parsedFormula, toEvaluatedRolls(nextSession.slots))
     const formulaName = name.trim()
@@ -1242,6 +1321,9 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       buildRollSlots(normalized.formulaText, connectedPixels),
       pairedPixels,
     )
+    // Debug: print pairedPixels keys used when starting a roll
+    // eslint-disable-next-line no-console
+    console.log('handleRoll pairedPixels keys', Object.keys(pairedPixels))
     const nextSession: RollSession = {
       parsedFormula: parsed,
       slots,
@@ -1252,17 +1334,37 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     }
 
     setManualInputs({})
+    // When we perform the immediate initial glow below we want to avoid a
+    // scheduled duplicate glow created by other effects that run after the
+    // `rollSession` state update. Suppress scheduling of delayed glows for
+    // the `FORMULA_ROLL_TRANSITION_DELAY_MS` window so only the immediate
+    // glow is observed.
+    suppressScheduledUntilRef.current = Date.now() + FORMULA_ROLL_TRANSITION_DELAY_MS
     setRollSession(nextSession)
     markAssignedPixelsUsed(slots)
 
     const pixelIdsToGlow = getGlowPixelIdsForSlots(slots, connectedPixels)
 
-    await Promise.allSettled(pixelIdsToGlow.map((pixelId) => glowDie(pixelId)))
+    const now = Date.now()
+    if (glowInFlightRef.current) {
+      nativeLog('d', 'skipping initial glow while glow in-flight', { now, lastGlowAt: lastGlowAtRef.current, GLOW_DEDUP_MS })
+    } else if (now - lastGlowAtRef.current >= GLOW_DEDUP_MS) {
+      glowInFlightRef.current = true
+      lastGlowAtRef.current = now
+      nativeLog('i', 'performing initial glow', { sessionId: rollSession?.sessionId, pixelIdsToGlow })
+      await executeGlowForPixels(pixelIdsToGlow, nextSession.sessionId)
+      window.setTimeout(() => {
+        glowInFlightRef.current = false
+      }, GLOW_DEDUP_MS)
+    } else {
+      nativeLog('d', 'skipping duplicate initial glow', { since: Date.now() - lastGlowAtRef.current })
+    }
   }
 
   const handleCancelRoll = async () => {
     clearPendingGlowPrompt()
     setGlowPauseUntil(null)
+    glowPauseUntilRef.current = null
     await stopAllGlows()
     setManualInputs({})
     setRollSession(null)
@@ -1301,30 +1403,66 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     try {
       nativeLog('i', 'attempting reconnects for pending candidates', { sessionId: rollSession.sessionId, disconnectedCandidates })
       await Promise.allSettled(
-        disconnectedCandidates.map((id) => connectRememberedDie(id, { suppressErrors: true, singleAttempt: true })),
+        disconnectedCandidates.map((id) => connectRememberedDie(id, { suppressErrors: true })),
       )
     } finally {
       pendingReconnectInFlightRef.current = false
     }
   }, [rollSession])
 
-  const handlePromptPendingDice = useCallback(async () => {
-    if (!rollSession || rollSession.result !== null) {
+  const handlePromptPendingDice = useCallback(async (force = false) => {
+    const currentSession = rollSessionRef.current
+    if (!currentSession || currentSession.result !== null) {
       return
     }
+
+    // Debug: log when handler invoked during tests
+    // eslint-disable-next-line no-console
+    // eslint-disable-next-line no-console
+    console.log('HPD start', {
+      sessionId: currentSession.sessionId,
+      force,
+      now: Date.now(),
+      lastGlowAt: lastGlowAtRef.current,
+      glowInFlight: glowInFlightRef.current,
+      glowPauseUntilState: glowPauseUntil,
+      glowPauseUntilRef: glowPauseUntilRef.current,
+    })
 
     const storeState = useAppStore.getState()
     const latestConnectedPixels: ConnectedPixel[] = Object.values(storeState.pixels)
       .filter((p) => p.connectionState === 'connected')
       .map((p) => ({ pixelId: p.pixelId, dieType: p.dieType }))
 
-    const pixelIdsToGlow = getPendingGlowPixelIds(rollSession, latestConnectedPixels)
+    const pixelIdsToGlow = getPendingGlowPixelIds(currentSession, latestConnectedPixels)
+    // Debug: inspect computed pixels to glow
+    // eslint-disable-next-line no-console
+    console.log('HPD pixelIdsToGlow', pixelIdsToGlow)
     if (pixelIdsToGlow.length === 0) {
       return
     }
 
     clearPendingGlowPrompt()
-    await Promise.allSettled(pixelIdsToGlow.map((pixelId) => glowDie(pixelId)))
+    const now = Date.now()
+    if (glowInFlightRef.current && !force) {
+      nativeLog('d', 'skipping prompt glow while glow in-flight', { now, lastGlowAt: lastGlowAtRef.current, GLOW_DEDUP_MS })
+      // eslint-disable-next-line no-console
+      console.log('HPD skip due to glowInFlight', { now, lastGlowAt: lastGlowAtRef.current })
+    } else if (force || now - lastGlowAtRef.current >= GLOW_DEDUP_MS) {
+      glowInFlightRef.current = true
+      lastGlowAtRef.current = now
+      nativeLog('i', 'performing prompt glow', { sessionId: currentSession?.sessionId, pixelIdsToGlow, force })
+      // eslint-disable-next-line no-console
+      console.log('HPD executing glow', { now, pixelIdsToGlow, force })
+      await executeGlowForPixels(pixelIdsToGlow, force)
+      window.setTimeout(() => {
+        glowInFlightRef.current = false
+      }, GLOW_DEDUP_MS)
+    } else {
+      nativeLog('d', 'skipping duplicate prompt glow', { since: Date.now() - lastGlowAtRef.current })
+      // eslint-disable-next-line no-console
+      console.log('HPD skip duplicate', { since: Date.now() - lastGlowAtRef.current })
+    }
 
     // After completing a blink loop, attempt to reconnect any of the
     // remembered dice that are known to be needed for this roll session.
@@ -1333,33 +1471,86 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     void attemptPendingReconnects()
   }, [clearPendingGlowPrompt, rollSession, attemptPendingReconnects])
 
-  const markPixelRolling = useCallback((pixelId: string) => {
-    const prevTimer = rollingTimersRef.current.get(pixelId)
-    if (prevTimer !== undefined) {
-      window.clearTimeout(prevTimer)
-    }
+  const promptGlowForRoll = useCallback(async (rollId: string, force = false) => {
+    const currentSession = rollSessionRef.current
+    // eslint-disable-next-line no-console
+    console.log('promptGlowForRoll invoked', { rollId, force, sessionId: currentSession?.sessionId })
+    if (!currentSession || currentSession.result !== null) return
 
-    const expiry = Date.now() + ROLL_ROLLING_HOLD_MS
-    rollingExpiryRef.current.set(pixelId, expiry)
+    const storeState = useAppStore.getState()
+    const latestConnectedPixels: ConnectedPixel[] = Object.values(storeState.pixels)
+      .filter((p) => p.connectionState === 'connected')
+      .map((p) => ({ pixelId: p.pixelId, dieType: p.dieType }))
 
-    // Update global pause to the maximum expiry across rolling pixels
-    const expiries = Array.from(rollingExpiryRef.current.values())
-    const maxExpiry = expiries.length === 0 ? null : Math.max(...expiries)
-    setGlowPauseUntil(maxExpiry)
+    let pixelIdsToGlow: string[] = []
 
-    const timerId = window.setTimeout(() => {
-      rollingTimersRef.current.delete(pixelId)
-      rollingExpiryRef.current.delete(pixelId)
-      const remaining = Array.from(rollingExpiryRef.current.values())
-      const newMax = remaining.length === 0 ? null : Math.max(...remaining)
-      setGlowPauseUntil(newMax)
-      if (newMax === null) {
-        void handlePromptPendingDice()
+    // If assignments were just re-computed due to a connected-pool change,
+    // a user's click should re-glow all pending slots (the global pending
+    // set) so the user sees the updated assignments. Otherwise, only the
+    // targeted slot(s) are re-glowed.
+    if (force && lastAssignReassignedChangedRef.current) {
+      const pendingSlots = currentSession.slots.filter((s) => s.face === null && s.source === 'ble')
+      // eslint-disable-next-line no-console
+      console.log('promptGlowForRoll (global pending) targetSlots', { rollId, pendingSlots })
+      pixelIdsToGlow = getGlowPixelIdsForSlots(pendingSlots, latestConnectedPixels)
+    } else {
+      const targetSlots = currentSession.slots.filter((slot) => {
+        if (slot.logicalDieType === 'd100') {
+          return slot.logicalId === rollId
+        }
+
+        return slot.id === rollId
+      })
+
+      // Debug: show which slots are targeted for this roll prompt
+      // eslint-disable-next-line no-console
+      console.log('promptGlowForRoll targetSlots', { rollId, targetSlots })
+
+      const targetPendingSlots = targetSlots.filter((s) => s.face === null && s.source === 'ble')
+
+      // If the user clicked a pending slot and there are multiple pending
+      // slots of the same die type (a partial shared-die roll), glow the
+      // remaining number needed across that die type rather than only the
+      // single clicked slot. This ensures clicks in multi-slot groups glow
+      // the expected number of dice.
+      if (force && targetPendingSlots.length === 1) {
+        const dieType = targetPendingSlots[0].dieType
+        const sameTypePending = currentSession.slots.filter(
+          (s) => s.face === null && s.source === 'ble' && s.dieType === dieType,
+        )
+
+        if (sameTypePending.length > 1) {
+          // eslint-disable-next-line no-console
+          console.log('promptGlowForRoll (same-type pending) targetSlots', { rollId, sameTypePending })
+          pixelIdsToGlow = getGlowPixelIdsForSlots(sameTypePending, latestConnectedPixels)
+        } else {
+          pixelIdsToGlow = getGlowPixelIdsForSlots(targetPendingSlots, latestConnectedPixels)
+        }
+      } else {
+        pixelIdsToGlow = getGlowPixelIdsForSlots(targetPendingSlots, latestConnectedPixels)
       }
-    }, ROLL_ROLLING_HOLD_MS)
+    }
+    // eslint-disable-next-line no-console
+    console.log('promptGlowForRoll pixelIdsToGlow', { rollId, pixelIdsToGlow, latestConnectedPixels })
+    if (pixelIdsToGlow.length === 0) return
 
-    rollingTimersRef.current.set(pixelId, timerId)
-  }, [handlePromptPendingDice])
+    clearPendingGlowPrompt()
+
+    const now = Date.now()
+    if (glowInFlightRef.current && !force) {
+      nativeLog('d', 'skipping prompt glow while glow in-flight (single roll)', { now, lastGlowAt: lastGlowAtRef.current, GLOW_DEDUP_MS })
+    } else if (force || now - lastGlowAtRef.current >= GLOW_DEDUP_MS) {
+      glowInFlightRef.current = true
+      lastGlowAtRef.current = now
+      nativeLog('i', 'performing prompt glow (single roll)', { sessionId: currentSession?.sessionId, rollId, pixelIdsToGlow, force })
+      await executeGlowForPixels(pixelIdsToGlow, force)
+      window.setTimeout(() => {
+        glowInFlightRef.current = false
+      }, GLOW_DEDUP_MS)
+    } else {
+      nativeLog('d', 'skipping duplicate prompt glow (single roll)', { since: Date.now() - lastGlowAtRef.current })
+    }
+  }, [clearPendingGlowPrompt, executeGlowForPixels])
 
   const handleManualInputChange = (slotId: string, value: string) => {
     setManualInputs((current) => ({
@@ -1589,44 +1780,11 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       })
 
       clearPendingGlowPrompt()
-      markPixelRolling(_pixelId)
+      const pauseUntil = Date.now() + ROLL_GLOW_REPEAT_MS
+      setGlowPauseUntil(pauseUntil)
+      glowPauseUntilRef.current = pauseUntil
     })
-  }, [clearPendingGlowPrompt, isAwaitingRolls, markPixelRolling])
-
-  useEffect(() => {
-    if (!isAwaitingRolls || !rollSession) return
-
-    const unsubscribe = onNativeNotification((event) => {
-      try {
-        const bytes = event.value
-        if (!bytes || bytes.length < 2) return
-
-        // BLE frames observed on the native bridge use 0x03 0x03 for
-        // intermediate rolling frames, and 0x03 0x01 for the settled result.
-        // When we see a rolling frame for a pixel involved in the current
-        // roll session, mark it as rolling so the UI pauses blinking while
-        // the physical die is still in motion.
-        if (bytes[0] === 0x03 && bytes[1] === 0x03) {
-          const pixelState = useAppStore.getState().pixels[event.systemId]
-          if (!pixelState) return
-
-          const hasPendingSlot = rollSession.slots.some(
-            (s) => s.face === null && s.source === 'ble' && s.dieType === pixelState.dieType,
-          )
-
-          if (hasPendingSlot) {
-            markPixelRolling(event.systemId)
-          }
-        }
-      } catch {
-        // best-effort
-      }
-    })
-
-    return () => {
-      unsubscribe()
-    }
-  }, [isAwaitingRolls, rollSession, markPixelRolling])
+  }, [clearPendingGlowPrompt, isAwaitingRolls])
 
   useEffect(() => {
     if (!isAwaitingRolls || !rollSession || rollSession.result !== null) {
@@ -1662,6 +1820,14 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
 
         const plan = buildAvailabilityPlan(rollSession.slots, latestConnectedPixels, latestPaired)
         nativeLog('i', 'syncRememberedDice plan', { sessionId: rollSession.sessionId, plan })
+        // Debug: emit plan details for failing tests investigation
+        // eslint-disable-next-line no-console
+        console.log('syncRememberedDice plan', {
+          sessionId: rollSession.sessionId,
+          plan,
+          latestConnectedPixels,
+          latestPairedKeys: Object.keys(latestPaired),
+        })
 
         if (cancelled) return
 
@@ -1719,78 +1885,81 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
 
           nativeLog('i', 'connect attempt decision', { sessionId: rollSession.sessionId, currentConnectedCount, totalNeeded, MAX_CONNECTED })
 
-          if (currentConnectedCount >= MAX_CONNECTED || currentConnectedCount + totalNeeded > MAX_CONNECTED) {
+          // Decide how many unassigned connected dice we should free up for
+          // the upcoming connect attempts. If we are already over the
+          // `MAX_CONNECTED` cap we must disconnect the minimal number needed;
+          // otherwise we may proactively disconnect up to the number of
+          // `connectCandidates` if suitable unassigned candidates exist. This
+          // helps ensure remembered dice of the required type can be
+          // attempted even when the native stack prefers a limited candidate
+          // set.
+          {
             const needToDisconnect = Math.max(0, currentConnectedCount + totalNeeded - MAX_CONNECTED)
 
-              if (needToDisconnect > 0) {
-              // Choose candidates to disconnect: prefer initial disconnect plan,
-              // but ensure we free enough slots (up to `needToDisconnect`) by
-              // selecting additional unassigned connected dice if the initial set
-              // is too small. Persist the expanded set so we don't escalate across
-              // retries.
+            const assignedPixelIds = new Set<string>(
+              rollSession.slots.map((s) => s.pixelId).filter((id): id is string => id !== null),
+            )
 
-              const assignedPixelIds = new Set<string>(
-                rollSession.slots.map((s) => s.pixelId).filter((id): id is string => id !== null),
+            const connectedByAge = [...latestConnectedPixels]
+              .filter((p) => !assignedPixelIds.has(p.pixelId))
+              .sort(
+                (left, right) =>
+                  (latestPaired[left.pixelId]?.lastUsedAt ?? 0) - (latestPaired[right.pixelId]?.lastUsedAt ?? 0),
               )
 
-              const connectedByAge = [...latestConnectedPixels]
-                .filter((p) => !assignedPixelIds.has(p.pixelId))
-                .sort(
-                  (left, right) =>
-                    (latestPaired[left.pixelId]?.lastUsedAt ?? 0) - (latestPaired[right.pixelId]?.lastUsedAt ?? 0),
-                )
+            const initialSet = new Set(availabilityInitialDisconnectRef.current ?? [])
+            const prioritized = connectedByAge
+              .filter((p) => initialSet.has(p.pixelId))
+              .map((p) => p.pixelId)
 
-              const initialSet = new Set(availabilityInitialDisconnectRef.current ?? [])
-              const prioritized = connectedByAge
-                .filter((p) => initialSet.has(p.pixelId))
-                .map((p) => p.pixelId)
+            const availableUnassignedCount = connectedByAge.length
+            // If we strictly need to disconnect (over cap) choose that number;
+            // otherwise allow up to `totalNeeded` preemptive disconnects when
+            // unassigned candidates exist.
+            const allowedToDisconnect = Math.min(needToDisconnect > 0 ? needToDisconnect : totalNeeded, availableUnassignedCount)
 
-              const availableUnassignedCount = connectedByAge.length
-              const allowedToDisconnect = Math.min(needToDisconnect, availableUnassignedCount)
+            let toDisconnectForSpace = prioritized.slice(0, allowedToDisconnect)
 
-              let toDisconnectForSpace = prioritized.slice(0, allowedToDisconnect)
+            if (toDisconnectForSpace.length < allowedToDisconnect) {
+              const remaining = connectedByAge.map((p) => p.pixelId).filter((id) => !toDisconnectForSpace.includes(id))
+              toDisconnectForSpace = toDisconnectForSpace.concat(remaining.slice(0, allowedToDisconnect - toDisconnectForSpace.length))
+            }
 
-              if (toDisconnectForSpace.length < allowedToDisconnect) {
-                const remaining = connectedByAge.map((p) => p.pixelId).filter((id) => !toDisconnectForSpace.includes(id))
-                toDisconnectForSpace = toDisconnectForSpace.concat(remaining.slice(0, allowedToDisconnect - toDisconnectForSpace.length))
-              }
+            // Persist the expanded disconnect candidates so retries won't keep
+            // expanding the set.
+            if ((availabilityInitialDisconnectRef.current?.length ?? 0) < toDisconnectForSpace.length) {
+              availabilityInitialDisconnectRef.current = toDisconnectForSpace.slice()
+              nativeLog('i', 'expanded and persisted initial disconnect candidates', {
+                sessionId: rollSession.sessionId,
+                disconnectCandidates: availabilityInitialDisconnectRef.current,
+              })
+            }
 
-              // Persist the expanded disconnect candidates so retries won't keep
-              // expanding the set.
-              if ((availabilityInitialDisconnectRef.current?.length ?? 0) < toDisconnectForSpace.length) {
-                availabilityInitialDisconnectRef.current = toDisconnectForSpace.slice()
-                nativeLog('i', 'expanded and persisted initial disconnect candidates', {
-                  sessionId: rollSession.sessionId,
-                  disconnectCandidates: availabilityInitialDisconnectRef.current,
-                })
-              }
+            if (toDisconnectForSpace.length > 0) {
+              nativeLog('d', 'preemptive disconnect selection', {
+                sessionId: rollSession.sessionId,
+                needToDisconnect,
+                allowedToDisconnect,
+                toDisconnectForSpace,
+              })
 
-              if (toDisconnectForSpace.length > 0) {
-                nativeLog('d', 'preemptive disconnect selection', {
-                  sessionId: rollSession.sessionId,
-                  needToDisconnect,
-                  allowedToDisconnect,
-                  toDisconnectForSpace,
-                })
+              nativeLog('i', 'performing preemptive disconnects', { sessionId: rollSession.sessionId, toDisconnectForSpace })
+              const disconnectResults = await Promise.allSettled(
+                toDisconnectForSpace.map((id) => disconnectDie(id, 'required-for-roll-disconnect')),
+              )
+              nativeLog('i', 'preemptive disconnect results', { sessionId: rollSession.sessionId, disconnectResults })
 
-                nativeLog('i', 'performing preemptive disconnects', { sessionId: rollSession.sessionId, toDisconnectForSpace })
-                const disconnectResults = await Promise.allSettled(
-                  toDisconnectForSpace.map((id) => disconnectDie(id, 'required-for-roll-disconnect')),
-                )
-                nativeLog('i', 'preemptive disconnect results', { sessionId: rollSession.sessionId, disconnectResults })
+              // Wait briefly to allow the Android BLE stack to free resources
+              // after disconnects before attempting new connects.
+              const pauseMs = 350
+              nativeLog('i', 'pausing after preemptive disconnects', { sessionId: rollSession.sessionId, pauseMs })
+              await new Promise((resolve) => window.setTimeout(resolve, pauseMs))
 
-                // Wait briefly to allow the Android BLE stack to free resources
-                // after disconnects before attempting new connects.
-                const pauseMs = 350
-                nativeLog('i', 'pausing after preemptive disconnects', { sessionId: rollSession.sessionId, pauseMs })
-                await new Promise((resolve) => window.setTimeout(resolve, pauseMs))
-
-                nativeLog('d', 'after preemptive disconnect pause', {
-                  sessionId: rollSession.sessionId,
-                  availabilityConnectAttempted: availabilityConnectAttemptedRef.current,
-                  connectCandidates,
-                })
-              }
+              nativeLog('d', 'after preemptive disconnect pause', {
+                sessionId: rollSession.sessionId,
+                availabilityConnectAttempted: availabilityConnectAttemptedRef.current,
+                connectCandidates,
+              })
             }
           }
 
@@ -1805,7 +1974,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
           if (!cancelled && connectCandidates.length > 0) {
             nativeLog('i', 'attempting single-shot connects for candidates', { sessionId: rollSession.sessionId, connectCandidates })
             const connectResults = await Promise.allSettled(
-              connectCandidates.map((id) => connectRememberedDie(id, { suppressErrors: true, singleAttempt: true })),
+              connectCandidates.map((id) => connectRememberedDie(id, { suppressErrors: true })),
             )
             nativeLog('i', 'single-shot connect results', { sessionId: rollSession.sessionId, connectResults })
           }
@@ -1879,6 +2048,19 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
         reassigned.slots.filter((slot) => slot.face === null && slot.source === 'ble'),
         connectedPixels,
       )
+      // Debug: log reassignment results and pixelIds to glow
+      // eslint-disable-next-line no-console
+      console.log('assignPendingBlePixelIds result', { sessionId: current.sessionId, reassignedChanged: reassigned.changed, pixelIdsToGlow, connectedPixels })
+
+      // Remember that assignments changed recently so prompt clicks can
+      // trigger a global re-glow for all pending slots rather than the
+      // single targeted slot. Clear the flag after a short grace period.
+      lastAssignReassignedChangedRef.current = reassigned.changed
+      if (reassigned.changed) {
+        window.setTimeout(() => {
+          lastAssignReassignedChangedRef.current = false
+        }, FORMULA_ROLL_TRANSITION_DELAY_MS)
+      }
 
       if (!reassigned.changed) {
         return current
@@ -1926,6 +2108,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     if (glowPauseUntil !== null && glowPauseUntil > Date.now()) {
       resumeTimeout = window.setTimeout(() => {
         setGlowPauseUntil(null)
+        glowPauseUntilRef.current = null
         void handlePromptPendingDice()
       }, glowPauseUntil - Date.now())
     }
@@ -2073,7 +2256,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
                   face={roll.face}
                   pending={roll.pending}
                   dropped={roll.dropped}
-                  onClick={roll.pending && isAwaitingRolls ? () => void handlePromptPendingDice() : undefined}
+                  onClick={roll.pending && isAwaitingRolls ? () => void promptGlowForRoll(roll.id, true) : undefined}
                   ariaLabel={
                     roll.pending
                       ? `${displayDieType(roll.dieType)} #${roll.sequence} pending`

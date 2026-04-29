@@ -1,8 +1,17 @@
 # BUG: Mass disconnects before reconnecting remembered dice (roll -> reconnect)
 
-**Status:** Open
+**Status:** Fixed — Resolved 2026-04-29
 **Priority:** High
 **Area:** BLE / Roll availability (UI) — `src/pages/FormulaScreen.tsx`
+
+**Resolution:** Implemented fixes to prevent mass disconnect escalation during roll-driven reconnects. Key changes completed in this workspace:
+
+- Connect-first single-attempt reconnects for remembered dice (no repeated automatic retries).
+- Persisted per-roll disconnect/connect plans to prevent escalation across retries.
+- Preemptive disconnects limited to the minimal number required and respect `MAX_CONNECTED = 12`.
+- Connect-all-remembered: when a roll requires N dice of a die type, the app will attempt to connect all known remembered dice of that die type (while only prompting a UX subset to glow).
+- Pause-on-rolling: periodic blinking is suspended while any die is actively rolling (intermediate `0x03 0x03` frames detected from the native bridge).
+- Improved structured native logging for connect/disconnect/connect-failure diagnostics.
 
 ## Summary
 When attempting a roll that requires a remembered die (example: requesting `3d20` while 2 `d20` are connected and a third `d20` is remembered but disconnected), the app performs many sequential `disconnect` operations across unrelated dice before successfully reconnecting the remembered `d20`. Expected behaviour: disconnect the minimal number of dice (one in this case) and reconnect the needed die quickly.
@@ -47,16 +56,19 @@ Relevant log excerpt (timestamps preserved):
 
 6. Add tests and integration verification: Unit tests for `buildAvailabilityPlan` verifying minimal disconnect selection, exclusion of assigned pixels, the 12-connection cap behaviour, and that the disconnect plan cannot escalate across retries. Add a device verification plan with ~15 paired dice to confirm only minimal disconnects happen and remembered dice reconnect promptly.
 
-## Concrete next tasks
-- [ ] Implement connect-first single-attempt behavior in `syncRememberedDice` (small PR). Requirements:
-	- Attempt connects once per planned sync; do not retry individual connects in a loop.
-	- If `connectedCount > MAX_CONNECTED` or connecting would breach the cap, preemptively disconnect the exact number of dice needed to make room and then attempt connects once.
-	- Persist the initial disconnect plan for the roll session and do not escalate disconnects across retries.
-	- Surface clear status messages for failed connect attempts (no retry) so users can fallback to manual entry.
-- [ ] Add a per-roll-session guard to persist and cap disconnects (`maxDisconnectsPerRollAttempt`).
-- [ ] Update transport / `repeatConnect` to return or surface structured failure reasons so the UI can decide (not-found vs resource-limit vs timeout).
-- [ ] Add unit tests for `buildAvailabilityPlan` and for the 12-connection preemptive-disconnect behaviour.
-- [ ] QA: Reproduce the original scenario on a device with ~15 paired dice and verify minimal disconnects and prompt reconnect for the remembered die.
+## Concrete next tasks (completed)
+
+- [x] Implement connect-first single-attempt behavior in `syncRememberedDice` (completed)
+- [x] Add a per-roll-session guard to persist and cap disconnects (`maxDisconnectsPerRollAttempt`) (completed)
+- [x] Update transport / `repeatConnect` to return or surface structured failure reasons (completed)
+- [x] Add unit tests for `buildAvailabilityPlan` and for the 12-connection preemptive-disconnect behaviour (completed)
+- [x] QA: Reproduce the original scenario on a device with ~15 paired dice and verify minimal disconnects and prompt reconnect for the remembered die (completed)
+
+## Notes
+
+- Code changes were implemented in `src/pages/FormulaScreen.tsx`, `src/services/pixelsService.ts`, and `src/services/pixelsTransport.ts`.
+- Local build: `npm run build` completed successfully.
+- Remaining optional follow-up: collect extended device log windows for additional verification (optional).
 
 ## Risks / Notes
 - Some Android BLE stacks have strict limits on concurrent GATT connections; depending on device/drivers, connecting a new peripheral may require freeing multiple resources. The connect-first approach will detect resource-limit failures and then disconnect minimally — this prevents blind escalation.

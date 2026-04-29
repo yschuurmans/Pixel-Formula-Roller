@@ -1,5 +1,7 @@
 # STORY-010: Settings Screen — Forget Remembered Die
 
+Status Update: Partially done — the forget/remove-from-remembered flow is implemented and wired to Settings; confirmation modal flow and end-to-end acceptance checks need final QA.
+
 ## Goal
 Let users permanently remove a remembered Pixel die from the app so it no longer appears in Settings and will not auto-connect again until it is paired manually.
 

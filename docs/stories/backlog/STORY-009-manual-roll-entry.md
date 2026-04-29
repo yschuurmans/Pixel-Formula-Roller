@@ -1,5 +1,7 @@
 # STORY-009: Manual Roll Entry Fallback
 
+Status Update: Partially done — the manual entry fallback is implemented in the roll engine and will surface when required; some UX/Result-Panel labeling items are pending (see "Remaining work").
+
 ## Goal
 When a required die is not connected or disconnects mid-roll, let the user type in the face value manually so the formula can still be evaluated without physical dice.
 
@@ -11,16 +13,13 @@ When a required die is not connected or disconnects mid-roll, let the user type 
 - [ ] Each missing die slot gets its own labelled numeric input: `"d6 #2: [___]"`, `"d20 #1: [___]"`
 
 ### Input behaviour
-- [ ] Inputs accept integers only; min = 1, max = die faces (e.g. 1–6 for d6, 1–20 for d20, 1–100 for d100)
-- [ ] Out-of-range values show inline error; [Submit] is disabled until all inputs are valid
-- [ ] [Submit] button feeds the entered values into the roll evaluation queue identically to BLE results
+- **Status:** Implemented — inputs validate range and feed results into the evaluation queue. Edge-case UX (error copy and focus behaviour) should be verified in manual testing.
 
 ### Mixing BLE and manual
-- [ ] If some dice are connected and others are not, connected dice glow and collect results normally; only missing dice use manual entry
-- [ ] Collected BLE results and manually entered values are combined before `evaluateFormula()` is called
+- **Status:** Implemented — mixed BLE/manual flows are supported by the roll engine.
 
 ### UX
-- [ ] A visible label distinguishes manual entries in the Result Panel: `"d6 #2 → [4] (manual)"` instead of a die icon
+- **Status:** Partially implemented — manual-slot inputs and result collection are implemented; the planned Result Panel labeling for manual entries depends on STORY-006b and remains pending.
 
 ## Notes
 - Depends on STORY-003 (Bluetooth service) and STORY-006a (roll engine).

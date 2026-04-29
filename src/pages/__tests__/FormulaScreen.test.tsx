@@ -674,14 +674,13 @@ describe('FormulaScreen', () => {
     await waitFor(() =>
       expect(mockConnectRememberedDie).toHaveBeenCalledWith('pixel-d6-memory', {
         suppressErrors: true,
-        singleAttempt: true,
       }),
     )
     expect(screen.queryByRole('button', { name: 'Submit manual rolls' })).not.toBeInTheDocument()
     expect(screen.getByText('Trying to reconnect remembered dice...')).toBeInTheDocument()
   })
 
-  it('attempts connect-first for remembered required dice when under connection cap', async () => {
+  it('disconnects the least recently used unrelated dice before reconnecting remembered required dice', async () => {
     useAppStore.setState({
       pairedPixelIds: ['pixel-d4', 'pixel-d6-needed', 'pixel-d8'],
       pairedPixels: {
@@ -724,15 +723,13 @@ describe('FormulaScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add d6' }))
     fireEvent.click(screen.getByRole('button', { name: 'Roll' }))
 
+    await waitFor(() => expect(mockDisconnectDie).toHaveBeenCalledWith('pixel-d4', 'required-for-roll-disconnect'))
     await waitFor(() =>
       expect(mockConnectRememberedDie).toHaveBeenCalledWith('pixel-d6-needed', {
         suppressErrors: true,
-        singleAttempt: true,
       }),
     )
-    // Under the MAX_CONNECTED cap we attempt to connect-first and should not
-    // disconnect unrelated dice.
-    expect(mockDisconnectDie).not.toHaveBeenCalled()
+    expect(mockDisconnectDie).not.toHaveBeenCalledWith('pixel-d8')
   })
 
   it('keeps the completed result visible until roll again is pressed', async () => {

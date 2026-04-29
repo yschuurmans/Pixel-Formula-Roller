@@ -38,7 +38,12 @@ export default function DieResultChip({
       <button
         type="button"
         aria-label={ariaLabel}
-        onClick={onClick}
+        onClick={() => {
+          // eslint-disable-next-line no-console
+          console.log('DieResultChip clicked', { ariaLabel })
+          // invoke provided handler
+          onClick()
+        }}
         className={`relative flex h-18 w-18 items-center justify-center border-2 shadow-[4px_4px_0_0_#09070d] ${toneClass} cursor-pointer transition-transform hover:-translate-y-[1px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#86efac] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0d162a]`}
         title={ariaLabel}
       >
