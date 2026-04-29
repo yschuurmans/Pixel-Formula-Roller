@@ -5,15 +5,38 @@ import {
   connectRememberedDie,
   disconnectDie,
   glowDie,
-  markPixelUsed,
   onRollResult,
   stopAllGlows,
 } from '../services/pixelsService'
 import { nativeLog } from '../services/pixelsTransport'
-import { useAppStore, type RememberedPixelEntry } from '../stores/useAppStore'
+import { useAppStore } from '../stores/useAppStore'
 import type { DieRollResult, DieType, EvaluationResult, ParsedFormula } from '../types/formula'
 import DieIcon from '../components/DieIcon'
 import DieResultChip from '../components/DieResultChip'
+import {
+  displayDieType,
+  createRollSlotId,
+  createLogicalRollId,
+  combinePercentFaces,
+  getManualEntryConfig,
+  getManualEntryLabel,
+  pickRandomPixels,
+  createFormulaId,
+  createRollSessionId,
+  createRollHistoryEntry,
+  AutoHideCountdown,
+} from './formulaHelpers'
+import {
+  getGlowPixelIdsForSlots,
+  getPendingGlowPixelIds,
+  assignPendingBlePixelIds,
+  promoteRecoverableManualSlots,
+  buildAvailabilityPlan,
+  hasRecoverableRememberedPixel,
+  markAssignedPixelsUsed,
+  type RollSlot,
+  type ConnectedPixel,
+} from './availabilityHelpers'
 
 const DIE_ORDER: DieType[] = ['d4', 'd6', 'd8', 'd10', 'd12', 'd20', 'd100']
 const DISPLAY_DIE_ORDER: DieType[] = [...DIE_ORDER].reverse() as DieType[]
@@ -45,22 +68,7 @@ type FormulaScreenLocationState = {
 
 type FormulaScreenMode = 'builder' | 'roll-only'
 
-type PercentRole = 'tens' | 'ones'
 
-type RollSlot = {
-  id: string
-  logicalId: string
-  dieType: DieType
-  logicalDieType: DieType
-  logicalSequence: number
-  percentRole: PercentRole | null
-  sequence: number
-  source: 'ble' | 'manual'
-  pixelId: string | null
-  face: number | null
-  resultSource: 'ble' | 'manual' | null
-  sequentialTotal: number | null
-}
 
 type RollSession = {
   parsedFormula: ParsedFormula
@@ -71,122 +79,7 @@ type RollSession = {
   sessionId?: string
 }
 
-type ConnectedPixel = {
-  pixelId: string
-  dieType: DieType
-}
 
-type AvailabilityPlan = {
-  disconnectIds: string[]
-  connectIds: string[]
-}
-
-function displayDieType(dieType: DieType): string {
-  return dieType === 'd100' ? 'd%' : dieType
-}
-
-function getDieFaces(dieType: DieType): number {
-  switch (dieType) {
-    case 'd4':
-      return 4
-    case 'd6':
-      return 6
-    case 'd8':
-      return 8
-    case 'd10':
-      return 10
-    case 'd12':
-      return 12
-    case 'd20':
-      return 20
-    case 'd100':
-      return 100
-  }
-}
-
-function createRollSlotId(dieType: DieType, groupIndex: number, sequence: number, percentRole?: PercentRole): string {
-  return percentRole === undefined
-    ? `${dieType}-${groupIndex}-${sequence}`
-    : `${dieType}-${groupIndex}-${sequence}-${percentRole}`
-}
-
-function createLogicalRollId(groupIndex: number, sequence: number): string {
-  return `${groupIndex}-${sequence}`
-}
-
-function getPercentOnesValue(face: number): number {
-  return face === 10 ? 0 : face
-}
-
-function getPercentTensValue(face: number): number {
-  if (face >= 1 && face <= 91 && face % 10 === 1) {
-    return face - 1
-  }
-
-  return face
-}
-
-function combinePercentFaces(tensFace: number | null, onesFace: number | null): number | null {
-  if (tensFace === null || onesFace === null) {
-    return null
-  }
-
-  const total = getPercentTensValue(tensFace) + getPercentOnesValue(onesFace)
-  return total === 0 ? 100 : total
-}
-
-function getManualEntryConfig(slot: RollSlot): { min: number; max: number; step: number; error: string } {
-  if (slot.logicalDieType === 'd100' && slot.percentRole === 'tens') {
-    return {
-      min: 0,
-      max: 90,
-      step: 10,
-      error: 'Enter a value from 0 to 90 in steps of 10',
-    }
-  }
-
-  if (slot.logicalDieType === 'd100' && slot.percentRole === 'ones') {
-    return {
-      min: 0,
-      max: 9,
-      step: 1,
-      error: 'Enter a value from 0 to 9',
-    }
-  }
-
-  return {
-    min: 1,
-    max: getDieFaces(slot.dieType),
-    step: 1,
-    error: `Enter a value from 1 to ${getDieFaces(slot.dieType)}`,
-  }
-}
-
-function getManualEntryLabel(slot: RollSlot): string {
-  if (slot.logicalDieType === 'd100' && slot.percentRole === 'tens') {
-    return `d% #${slot.logicalSequence} tens`
-  }
-
-  if (slot.logicalDieType === 'd100' && slot.percentRole === 'ones') {
-    return `d% #${slot.logicalSequence} ones`
-  }
-
-  return `${displayDieType(slot.logicalDieType)} #${slot.logicalSequence}`
-}
-
-function pickRandomPixels(pixels: ConnectedPixel[], count: number): ConnectedPixel[] {
-  if (count >= pixels.length) {
-    return pixels
-  }
-
-  const shuffledPixels = [...pixels]
-  for (let index = shuffledPixels.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(Math.random() * (index + 1))
-    ;[shuffledPixels[index], shuffledPixels[swapIndex]] = [shuffledPixels[swapIndex], shuffledPixels[index]]
-  }
-
-  return shuffledPixels.slice(0, count)
-}
 
 function buildRollSlots(
   formula: string,
@@ -504,331 +397,9 @@ function getKeepError(count: number, keepN: string): string | null {
   return null
 }
 
-function createFormulaId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
 
-  return `formula-${Date.now()}`
-}
 
-function createRollHistoryId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-
-  return `history-${Date.now()}`
-}
-
-function createRollSessionId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-
-  return `rollsession-${Date.now()}`
-}
-
-function createRollHistoryEntry(
-  formulaName: string,
-  parsedFormula: ParsedFormula,
-  result: EvaluationResult,
-) {
-  return {
-    id: createRollHistoryId(),
-    formulaName,
-    formulaString: parsedFormula.canonical,
-    total: result.total,
-    rolledAt: Date.now(),
-    result,
-    parsedFormula,
-  }
-}
-
-function getGlowPixelIdsForSlots(slots: RollSlot[], connectedPixels: ConnectedPixel[]): string[] {
-  const promptedPixelIds = new Set<string>()
-  const unassignedCounts = new Map<DieType, number>()
-
-  for (const slot of slots) {
-    if (slot.source !== 'ble') {
-      continue
-    }
-
-    if (slot.pixelId !== null) {
-      promptedPixelIds.add(slot.pixelId)
-      continue
-    }
-
-    unassignedCounts.set(slot.dieType, (unassignedCounts.get(slot.dieType) ?? 0) + 1)
-  }
-
-  for (const [dieType, count] of unassignedCounts) {
-    const availablePixels = connectedPixels.filter(
-      (pixel) => pixel.dieType === dieType && !promptedPixelIds.has(pixel.pixelId),
-    )
-
-    for (const pixel of pickRandomPixels(availablePixels, Math.min(count, availablePixels.length))) {
-      promptedPixelIds.add(pixel.pixelId)
-    }
-  }
-
-  return Array.from(promptedPixelIds)
-}
-
-function getPendingGlowPixelIds(rollSession: RollSession, connectedPixels: ConnectedPixel[]): string[] {
-  return getGlowPixelIdsForSlots(
-    rollSession.slots.filter((slot) => slot.face === null && slot.source === 'ble'),
-    connectedPixels,
-  )
-}
-
-function assignPendingBlePixelIds(
-  slots: RollSlot[],
-  connectedPixels: ConnectedPixel[],
-): { slots: RollSlot[]; changed: boolean } {
-  const assignments = new Map<string, string | null>()
-
-  for (const dieType of DIE_ORDER) {
-    const pendingSlots = slots.filter(
-      (slot) => slot.face === null && slot.source === 'ble' && slot.dieType === dieType,
-    )
-
-    if (pendingSlots.length === 0) {
-      continue
-    }
-
-    const matchingPixels = connectedPixels.filter((pixel) => pixel.dieType === dieType)
-    const assignedPixels =
-      matchingPixels.length === 0
-        ? []
-        : matchingPixels.length === 1
-          ? Array.from({ length: pendingSlots.length }, () => matchingPixels[0])
-          : pickRandomPixels(matchingPixels, Math.min(pendingSlots.length, matchingPixels.length))
-
-    for (const [index, slot] of pendingSlots.entries()) {
-      assignments.set(slot.id, assignedPixels[index]?.pixelId ?? null)
-    }
-  }
-
-  let changed = false
-  const nextSlots = slots.map((slot) => {
-    if (slot.face !== null || slot.source !== 'ble') {
-      return slot
-    }
-
-    const pixelId = assignments.get(slot.id) ?? null
-    if (slot.pixelId === pixelId) {
-      return slot
-    }
-
-    changed = true
-    return {
-      ...slot,
-      pixelId,
-    }
-  })
-
-  return { slots: nextSlots, changed }
-}
-
-function getRememberedPixelsByDieType(rememberedPixels: Record<string, RememberedPixelEntry>): Map<DieType, RememberedPixelEntry[]> {
-  const rememberedByDieType = new Map<DieType, RememberedPixelEntry[]>()
-
-  for (const rememberedPixel of Object.values(rememberedPixels)) {
-    const entries = rememberedByDieType.get(rememberedPixel.dieType) ?? []
-    entries.push(rememberedPixel)
-    rememberedByDieType.set(rememberedPixel.dieType, entries)
-  }
-
-  for (const entries of rememberedByDieType.values()) {
-    entries.sort((left, right) => (right.lastUsedAt ?? 0) - (left.lastUsedAt ?? 0))
-  }
-
-  return rememberedByDieType
-}
-
-function promoteRecoverableManualSlots(
-  slots: RollSlot[],
-  rememberedPixels: Record<string, RememberedPixelEntry>,
-): RollSlot[] {
-  // Some callers may pass a stale or empty `rememberedPixels` object
-  // (tests running with persisted state can observe timing differences).
-  // Fall back to the live store state when the provided value is empty so
-  // availability planning still considers remembered dice.
-  const effectiveRememberedPixels = Object.keys(rememberedPixels || {}).length
-    ? rememberedPixels
-    : useAppStore.getState().pairedPixels
-
-  const rememberedByDieType = getRememberedPixelsByDieType(effectiveRememberedPixels)
-
-  return slots.map((slot) => {
-    if (slot.source !== 'manual') {
-      return slot
-    }
-
-    if (!(rememberedByDieType.get(slot.dieType)?.length)) {
-      return slot
-    }
-
-    return {
-      ...slot,
-      source: 'ble',
-    }
-  })
-}
-
-function getPendingBleCounts(slots: RollSlot[]): Map<DieType, number> {
-  const counts = new Map<DieType, number>()
-
-  for (const slot of slots) {
-    if (slot.face !== null || slot.source !== 'ble') {
-      continue
-    }
-
-    counts.set(slot.dieType, (counts.get(slot.dieType) ?? 0) + 1)
-  }
-
-  return counts
-}
-
-function buildAvailabilityPlan(
-  slots: RollSlot[],
-  connectedPixels: ConnectedPixel[],
-  rememberedPixels: Record<string, RememberedPixelEntry>,
-): AvailabilityPlan {
-  const pendingCounts = getPendingBleCounts(slots)
-  // Debug: emit pending counts and remembered keys to diagnose availability planning
-  // eslint-disable-next-line no-console
-  console.log('buildAvailabilityPlan', { pendingCounts: Array.from(pendingCounts.entries()), connectedPixels, rememberedPixelsKeys: Object.keys(rememberedPixels) })
-  if (pendingCounts.size === 0) {
-    return { disconnectIds: [], connectIds: [] }
-  }
-
-  const connectedCounts = new Map<DieType, number>()
-  const connectedPixelIds = new Set(connectedPixels.map((pixel) => pixel.pixelId))
-  for (const pixel of connectedPixels) {
-    connectedCounts.set(pixel.dieType, (connectedCounts.get(pixel.dieType) ?? 0) + 1)
-  }
-
-  const effectiveRememberedPixels = Object.keys(rememberedPixels || {}).length
-    ? rememberedPixels
-    : useAppStore.getState().pairedPixels
-
-  const rememberedByDieType = getRememberedPixelsByDieType(effectiveRememberedPixels)
-  const connectCandidates: string[] = []
-
-  for (const dieType of DIE_ORDER) {
-    const pendingCount = pendingCounts.get(dieType) ?? 0
-    if (pendingCount === 0) continue
-
-    const currentlyConnected = connectedCounts.get(dieType) ?? 0
-    const missingCount = Math.max(0, pendingCount - currentlyConnected)
-    if (missingCount === 0) continue
-
-    const availableRemembered = (rememberedByDieType.get(dieType) ?? []).filter(
-      (pixel) => !connectedPixelIds.has(pixel.pixelId),
-    )
-
-    // When a die type is required for the roll, prefer to connect ALL known
-    // remembered dice of that type so the native stack can handle any of
-    // them that become available. Blinking will still only prompt a subset
-    // of connected dice (see `getGlowPixelIdsForSlots`). This ensures that
-    // we attempt reconnects for any remembered dice of the required type
-    // even if only a subset are highlighted to the user.
-    for (const rememberedPixel of availableRemembered) {
-      connectCandidates.push(rememberedPixel.pixelId)
-    }
-  }
-
-  if (connectCandidates.length === 0) {
-    return { disconnectIds: [], connectIds: [] }
-  }
-
-  // Compute how many connected dice we may safely disconnect per die type
-  const allowedDisconnect = new Map<DieType, number>()
-  for (const [dieType, connectedCount] of connectedCounts) {
-    const pending = pendingCounts.get(dieType) ?? 0
-    allowedDisconnect.set(dieType, Math.max(0, connectedCount - pending))
-  }
-
-  // Do not consider pixels that are already assigned to slots for disconnection
-  const assignedPixelIds = new Set<string>(
-    slots.map((s) => s.pixelId).filter((id): id is string => id !== null),
-  )
-
-  const connectedByAge = [...connectedPixels]
-    .filter((p) => !assignedPixelIds.has(p.pixelId))
-    .sort(
-      (left, right) => (rememberedPixels[left.pixelId]?.lastUsedAt ?? 0) - (rememberedPixels[right.pixelId]?.lastUsedAt ?? 0),
-    )
-
-  const disconnectIds: string[] = []
-
-  for (const pixel of connectedByAge) {
-    const allowed = allowedDisconnect.get(pixel.dieType) ?? 0
-    if (allowed <= 0) continue
-
-    disconnectIds.push(pixel.pixelId)
-    allowedDisconnect.set(pixel.dieType, allowed - 1)
-
-    if (disconnectIds.length === connectCandidates.length) break
-  }
-
-  // Return the full list of candidates to connect; disconnectIds may be empty
-  // (disconnects are only performed where needed/available).
-  return { disconnectIds, connectIds: connectCandidates }
-}
-
-function hasRecoverableRememberedPixel(
-  dieType: DieType,
-  rememberedPixels: Record<string, RememberedPixelEntry>,
-): boolean {
-  return Object.values(rememberedPixels).some((pixel) => pixel.dieType === dieType)
-}
-
-function markAssignedPixelsUsed(slots: RollSlot[]): void {
-  const seenPixelIds = new Set<string>()
-
-  for (const slot of slots) {
-    if (slot.source !== 'ble' || slot.pixelId === null || seenPixelIds.has(slot.pixelId)) {
-      continue
-    }
-
-    seenPixelIds.add(slot.pixelId)
-    markPixelUsed(slot.pixelId)
-  }
-}
-
-function AutoHideCountdown({ remainingMs, durationMs }: { remainingMs: number; durationMs: number }) {
-  const secondsRemaining = Math.ceil(remainingMs / 1000)
-  const radius = 18
-  const circumference = 2 * Math.PI * radius
-  const progress = remainingMs / durationMs
-  const strokeDashoffset = circumference * (1 - progress)
-
-  return (
-    <div
-      aria-label={`Roll screen closes in ${secondsRemaining} seconds`}
-      className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-[#4f94ff] bg-[#0b1324] shadow-[4px_4px_0_0_#07101f]"
-      title={`Auto closes in ${secondsRemaining} seconds`}
-    >
-      <svg viewBox="0 0 48 48" className="h-12 w-12 -rotate-90">
-        <circle cx="24" cy="24" r={radius} fill="none" stroke="#1f3257" strokeWidth="4" />
-        <circle
-          cx="24"
-          cy="24"
-          r={radius}
-          fill="none"
-          stroke="#86efac"
-          strokeWidth="4"
-          strokeDasharray={circumference}
-          strokeDashoffset={strokeDashoffset}
-          strokeLinecap="round"
-        />
-      </svg>
-      <span className="absolute text-[10px] text-[#d7ffe5]">{secondsRemaining}</span>
-    </div>
-  )
-}
+// Availability/assignment helpers moved to ./availabilityHelpers
 
 export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScreenMode }) {
   const location = useLocation()
@@ -1434,7 +1005,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       .filter((p) => p.connectionState === 'connected')
       .map((p) => ({ pixelId: p.pixelId, dieType: p.dieType }))
 
-    const pixelIdsToGlow = getPendingGlowPixelIds(currentSession, latestConnectedPixels)
+    const pixelIdsToGlow = getPendingGlowPixelIds(currentSession.slots, latestConnectedPixels)
     // Debug: inspect computed pixels to glow
     // eslint-disable-next-line no-console
     console.log('HPD pixelIdsToGlow', pixelIdsToGlow)
@@ -1985,7 +1556,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
               .filter((p) => p.connectionState === 'connected')
               .map((p) => ({ pixelId: p.pixelId, dieType: p.dieType }))
 
-            const pendingGlowPixelIds = getPendingGlowPixelIds(rollSession, latestConnectedPixels)
+            const pendingGlowPixelIds = getPendingGlowPixelIds(rollSession.slots, latestConnectedPixels)
             if (!cancelled && pendingGlowPixelIds.length > 0) {
               scheduleGlowPrompt(pendingGlowPixelIds)
             }
@@ -2094,7 +1665,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
         .filter((p) => p.connectionState === 'connected')
         .map((p) => ({ pixelId: p.pixelId, dieType: p.dieType }))
 
-      const pendingGlowPixelIds = getPendingGlowPixelIds(rollSession, latestConnectedPixels)
+      const pendingGlowPixelIds = getPendingGlowPixelIds(rollSession.slots, latestConnectedPixels)
       if (pendingGlowPixelIds.length === 0) {
         return
       }
