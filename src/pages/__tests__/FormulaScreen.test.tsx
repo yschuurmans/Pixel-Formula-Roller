@@ -472,7 +472,7 @@ describe('FormulaScreen', () => {
     expect(mockGlowDie).toHaveBeenCalledTimes(1)
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(4_900)
+      await vi.advanceTimersByTimeAsync(1_900)
     })
 
     expect(mockGlowDie).toHaveBeenCalledTimes(1)
@@ -542,7 +542,7 @@ describe('FormulaScreen', () => {
     mockGlowDie.mockClear()
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(4_900)
+      await vi.advanceTimersByTimeAsync(1_900)
     })
 
     expect(mockGlowDie).toHaveBeenCalledTimes(0)
@@ -553,7 +553,7 @@ describe('FormulaScreen', () => {
     })
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(4_900)
+      await vi.advanceTimersByTimeAsync(1_900)
     })
 
     expect(mockGlowDie).toHaveBeenCalledTimes(0)

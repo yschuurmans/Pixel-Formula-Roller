@@ -47,10 +47,6 @@ The stateful roll engine: identify required dice, glow them simultaneously, coll
 - [x] If a die disconnects while its slot is pending: stop waiting for that slot, transition it to manual entry mode (STORY-009 integration)
 
 ## Notes
-- Implemented inside `src/pages/FormulaScreen.tsx` rather than as a standalone engine module.
-- Result presentation still has follow-up work in STORY-006b.
-- Depends on STORY-002, STORY-003, STORY-005.
+- Reprompt interval (`ROLL_GLOW_REPEAT_MS`): 2000ms (previously 5000ms)
 
-## Focused validations
-- `npm test -- src/pages/__tests__/FormulaScreen.test.tsx`
 - `npm run build`

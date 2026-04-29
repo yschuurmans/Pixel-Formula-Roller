@@ -18,7 +18,7 @@ import DieResultChip from '../components/DieResultChip'
 const DIE_ORDER: DieType[] = ['d4', 'd6', 'd8', 'd10', 'd12', 'd20', 'd100']
 const DISPLAY_DIE_ORDER: DieType[] = [...DIE_ORDER].reverse() as DieType[]
 const FORMULA_ROLL_TRANSITION_DELAY_MS = 1200
-const ROLL_GLOW_REPEAT_MS = 5_000
+const ROLL_GLOW_REPEAT_MS = 2_000
 const REMEMBERED_DICE_RETRY_INTERVAL_MS = 2_000
 const MAX_CONNECTED = 12
 
