@@ -511,7 +511,7 @@ describe('pixelsService', () => {
     })
 
     let callCount = 0
-    const spy = vi.spyOn(service as any, 'connectRememberedDie').mockImplementation(async (pixelId: string) => {
+    const spy = vi.spyOn(service as any, 'connectRememberedDie').mockImplementation(async () => {
       callCount += 1
       // fail twice, succeed on the third attempt
       return callCount >= 3

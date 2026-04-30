@@ -15,6 +15,7 @@ import {
   getPixel,
   requestPixels,
   repeatConnect,
+  onNativeNotification,
   type PixelsBleAvailability,
   type Pixel,
   type PixelStatusEvent,
@@ -24,6 +25,7 @@ import type { DieType } from '../types/formula'
 import { useAppStore } from '../stores/useAppStore'
 
 const ROLL_DEDUP_MS = 300
+const ROLLING_INACTIVITY_MS = 5000
 const CONNECTED_GLOW_COLOR: GlowColor = { r: 34, g: 197, b: 94 }
 const CLEANUP_BASE_GLOW_COLOR: GlowColor = { r: 48, g: 48, b: 48 }
 const CLEANUP_ANIMATION_DURATION_MS = 10_000
@@ -208,6 +210,7 @@ export class PixelsService {
   private readonly rollCallbacks = new Set<RollResultCallback>()
   private readonly lastRollAt = new Map<string, number>()
   private readonly cleanupAnimationHashes = new Map<string, number>()
+  private readonly rollingControllers = new Map<string, { timerId: number | null }>()
   private batteryHighlightController: AbortController | null = null
 
   constructor(store: AppStore = useAppStore) {
@@ -823,6 +826,7 @@ export class PixelsService {
       connectionState: 'connected',
       batteryLevel: Number.isFinite(pixel.batteryLevel) ? pixel.batteryLevel : null,
       lastFace: null,
+      isRolling: false,
     })
 
     nativeLog('i', 'PixelsService.connectRegisteredPixel registered', pixelId, {
@@ -897,11 +901,54 @@ export class PixelsService {
     pixel.addEventListener('battery', onBattery)
     pixel.addEventListener('statusChanged', onStatusChanged)
 
-    this.cleanups.set(pixelId, [
+    const cleanupFns: Unsubscribe[] = [
       () => pixel.removeEventListener('roll', onRoll),
       () => pixel.removeEventListener('battery', onBattery),
       () => pixel.removeEventListener('statusChanged', onStatusChanged),
-    ])
+    ]
+
+    const nativeUnsub = onNativeNotification((event) => {
+      try {
+        if (event.systemId !== pixelId) return
+        const bytes = event.value
+        if (!bytes || bytes.length < 2) return
+
+        // Heuristic: detect intermediate "rolling" frames (observed as 0x03 0x03 bursts)
+        let rollingFrame = false
+        for (let i = 0; i + 1 < bytes.length; i++) {
+          if (bytes[i] === 0x03 && bytes[i + 1] === 0x03) {
+            rollingFrame = true
+            break
+          }
+        }
+        if (!rollingFrame) return
+
+        let controller = this.rollingControllers.get(pixelId)
+        if (!controller) {
+          controller = { timerId: null }
+          this.rollingControllers.set(pixelId, controller)
+          this.store.getState().updatePixelState(pixelId, { isRolling: true })
+        } else if (controller.timerId !== null) {
+          window.clearTimeout(controller.timerId)
+        } else {
+          this.store.getState().updatePixelState(pixelId, { isRolling: true })
+        }
+
+        controller.timerId = window.setTimeout(() => {
+          const c = this.rollingControllers.get(pixelId)
+          if (c && c.timerId !== null) {
+            window.clearTimeout(c.timerId)
+          }
+          this.rollingControllers.delete(pixelId)
+          this.store.getState().updatePixelState(pixelId, { isRolling: false })
+        }, ROLLING_INACTIVITY_MS) as unknown as number
+      } catch {
+        // best-effort; swallow heuristic errors
+      }
+    })
+
+    cleanupFns.push(() => nativeUnsub())
+    this.cleanups.set(pixelId, cleanupFns)
   }
 
   private cleanupPixel(pixelId: string): void {
@@ -917,6 +964,15 @@ export class PixelsService {
     this.pixels.delete(pixelId)
     this.lastRollAt.delete(pixelId)
     this.cleanupAnimationHashes.delete(pixelId)
+    // Clear any rolling timer and reset rolling flag in the store
+    const rollingCtrl = this.rollingControllers.get(pixelId)
+    if (rollingCtrl) {
+      if (rollingCtrl.timerId !== null) {
+        window.clearTimeout(rollingCtrl.timerId)
+      }
+      this.rollingControllers.delete(pixelId)
+    }
+    this.store.getState().updatePixelState(pixelId, { isRolling: false })
   }
 }
 

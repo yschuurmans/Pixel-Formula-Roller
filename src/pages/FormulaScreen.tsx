@@ -51,6 +51,12 @@ const DIE_ORDER: DieType[] = ['d4', 'd6', 'd8', 'd10', 'd12', 'd20', 'd100']
 const DISPLAY_DIE_ORDER: DieType[] = [...DIE_ORDER].reverse() as DieType[]
 const FORMULA_ROLL_TRANSITION_DELAY_MS = 1200
 const ROLL_GLOW_REPEAT_MS = 2_000
+const ROLL_GLOW_RESUME_DELAY_MS = 5_000
+// While a roll is pending, suppress scheduled prompts for this amount
+// (keeps setTimeout values within 32-bit signed range while effectively
+// preventing prompts until we explicitly resume). 24 hours is more than
+// sufficient for this purpose.
+const ROLL_GLOW_SUPPRESS_WHILE_PENDING_MS = 24 * 60 * 60 * 1000
 const REMEMBERED_DICE_RETRY_INTERVAL_MS = 2_000
 const MAX_CONNECTED = 12
 
@@ -128,6 +134,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
   const pendingRollScrollRef = useRef(false)
   const pendingGlowPromptTimeoutRef = useRef<number | null>(null)
   const queuedGlowPixelIdsRef = useRef<Set<string>>(new Set())
+  const pendingRollPixelsRef = useRef<Set<string>>(new Set())
   const lastGlowAtRef = useRef<number>(0)
   // Debounce window to prevent rapid duplicate glow calls. Use a value
   // slightly larger than `FORMULA_ROLL_TRANSITION_DELAY_MS` so scheduled
@@ -172,14 +179,22 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
   const [autoHideRemainingMs, setAutoHideRemainingMs] = useState<number | null>(null)
   const [rollOnlyAutoHideExpired, setRollOnlyAutoHideExpired] = useState(false)
 
+  // Keep a mutable ref in sync with `rollSession` so callbacks/intervals
+  // that close over the ref can read the latest session without
+  // re-subscribing.
   useEffect(() => {
     rollSessionRef.current = rollSession
   }, [rollSession])
 
+  // Mirror `glowPauseUntil` into a ref so async handlers and intervals
+  // can check the current pause window without additional subscriptions.
   useEffect(() => {
     glowPauseUntilRef.current = glowPauseUntil
   }, [glowPauseUntil])
 
+  // Initialize or restore the builder/roll state when the component
+  // mounts or when route params / mode change. Handles roll-only,
+  // editing, and new-formula initialization paths.
   useEffect(() => {
     if (isRollOnly) {
       if (!existingFormula) {
@@ -427,8 +442,13 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       // eslint-disable-next-line @typescript-eslint/no-floating-promises
       cancelAllReconnectsDuringRoll()
     } catch {}
-    setGlowPauseUntil(null)
-    glowPauseUntilRef.current = null
+    // After a roll completes, defer resuming prompt glows for a short window
+    // so the user has time to observe results before prompts resume.
+    const resumeUntil = Date.now() + ROLL_GLOW_RESUME_DELAY_MS
+    setGlowPauseUntil(resumeUntil)
+    glowPauseUntilRef.current = resumeUntil
+    // Clear any pending per-roll pixel tracking now that the session completed.
+    pendingRollPixelsRef.current.clear()
 
     const result = evaluateFormula(nextSession.parsedFormula, toEvaluatedRolls(nextSession.slots))
     const formulaName = name.trim()
@@ -611,6 +631,12 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
 
     const pixelIdsToGlow = getGlowPixelIdsForSlots(slots, connectedPixels)
 
+    // Track pending target pixels for this roll session. The immediate
+    // initial glow below is still performed explicitly. Do NOT suppress
+    // scheduled prompt glows here — they should continue until motion is
+    // detected (see `isRolling` handling elsewhere).
+    pendingRollPixelsRef.current = new Set(pixelIdsToGlow)
+
     const now = Date.now()
     if (glowInFlightRef.current) {
       nativeLog('d', 'skipping initial glow while glow in-flight', { now, lastGlowAt: lastGlowAtRef.current, GLOW_DEDUP_MS })
@@ -629,6 +655,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
 
   const handleCancelRoll = async () => {
     clearPendingGlowPrompt()
+    pendingRollPixelsRef.current.clear()
     setGlowPauseUntil(null)
     glowPauseUntilRef.current = null
     await stopAllGlows()
@@ -915,6 +942,8 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     setNavigationIntent({ message: 'Formula deleted' })
   }
 
+  // Cleanup effect: on unmount clear any pending scheduled prompt and
+  // stop all hardware glows to leave the device in a quiet state.
   useEffect(() => {
     return () => {
       clearPendingGlowPrompt()
@@ -922,11 +951,15 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     }
   }, [clearPendingGlowPrompt])
 
+  // Reset guards that prevent repeated auto-focus/auto-start when the
+  // navigation location changes.
   useEffect(() => {
     hasAutoFocusedRollEngineRef.current = false
     hasAutoStartedRollRef.current = false
   }, [location.key])
 
+  // Auto-scroll the roll engine into view if the route requested focus.
+  // Uses a ref guard so this happens only once per navigation.
   useEffect(() => {
     if (!isReady || !locationState?.focusRollEngine || formulaText.trim() === '' || hasAutoFocusedRollEngineRef.current) {
       return
@@ -942,6 +975,8 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     }
   }, [formulaText, isReady, locationState, scrollRollEngineIntoView])
 
+  // In roll-only mode, automatically start the roll once the screen is
+  // ready and the engine hasn't already auto-started.
   useEffect(() => {
     if (
       !isRollOnly ||
@@ -958,6 +993,8 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     void handleRoll()
   }, [completedRollResult, formulaText, isReady, isRollOnly, rollSession])
 
+  // If a pending scroll into view was requested when starting a roll,
+  // perform it once and clear the flag.
   useEffect(() => {
     if (!pendingRollScrollRef.current || !rollSession) {
       return
@@ -973,6 +1010,8 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     }
   }, [rollSession, scrollRollEngineIntoView])
 
+  // During roll-only mode, start a short countdown after a result and
+  // auto-navigate back when the countdown expires.
   useEffect(() => {
     if (!isRollOnly || !completedRollResult) {
       setAutoHideRemainingMs(null)
@@ -999,6 +1038,8 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     }
   }, [completedRollResult, isRollOnly])
 
+  // If all slots are populated with faces, finalize the roll session and
+  // compute/store results.
   useEffect(() => {
     if (!rollSession || rollSession.result !== null) {
       return
@@ -1009,12 +1050,15 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     }
   }, [completeRollSession, rollSession])
 
+  // Subscribe to SDK roll-result events while awaiting rolls. Update the
+  // matching slot when a result arrives, clear pending prompts for that
+  // pixel, and compute whether to suppress or resume scheduled glows
+  // based on whether any still-pending pixels are actively rolling.
   useEffect(() => {
     if (!isAwaitingRolls) {
       return
     }
-
-    return onRollResult((_pixelId, face, dieType) => {
+    return onRollResult((pixelId, face, dieType) => {
       setRollSession((current) => {
         if (!current || current.result) {
           return current
@@ -1051,12 +1095,53 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       })
 
       clearPendingGlowPrompt()
-      const pauseUntil = Date.now() + ROLL_GLOW_REPEAT_MS
-      setGlowPauseUntil(pauseUntil)
-      glowPauseUntilRef.current = pauseUntil
+      // Remove this pixel from the per-roll pending set. If any pending
+      // pixels remain, keep prompt glows suppressed. Only resume prompt
+      // glows once all pending pixels have reported and a short quiet
+      // window has elapsed.
+      try {
+        if (pendingRollPixelsRef.current.has(pixelId)) {
+          pendingRollPixelsRef.current.delete(pixelId)
+        }
+      } catch {}
+      // Decide suppression vs resume based only on whether any of the
+      // still-pending pixels are actively rolling. If none are rolling
+      // we allow scheduled prompt glows to continue; only when motion is
+      // detected do we suppress until explicit resume.
+      const pendingIds = Array.from(pendingRollPixelsRef.current)
+      const storeState = useAppStore.getState()
+      const anyRolling = pendingIds.some((id) => storeState.pixels[id]?.isRolling === true)
+
+      if (pendingIds.length === 0 && !anyRolling) {
+        const resumeUntil = Date.now() + ROLL_GLOW_RESUME_DELAY_MS
+        setGlowPauseUntil(resumeUntil)
+        glowPauseUntilRef.current = resumeUntil
+      } else if (anyRolling) {
+        const suppressUntil = Date.now() + ROLL_GLOW_SUPPRESS_WHILE_PENDING_MS
+        setGlowPauseUntil(suppressUntil)
+        glowPauseUntilRef.current = suppressUntil
+      }
     })
   }, [clearPendingGlowPrompt, isAwaitingRolls])
 
+  // Watch the `pixels` store and, if any pixel assigned to the current
+  // roll is actively rolling, apply suppression so scheduled prompts
+  // don't interrupt the physical roll.
+  useEffect(() => {
+    if (pendingRollPixelsRef.current.size === 0) return
+    const pendingIds = Array.from(pendingRollPixelsRef.current)
+    const anyRolling = pendingIds.some((id) => pixels[id]?.isRolling === true)
+    if (anyRolling) {
+      const suppressUntil = Date.now() + ROLL_GLOW_SUPPRESS_WHILE_PENDING_MS
+      setGlowPauseUntil(suppressUntil)
+      glowPauseUntilRef.current = suppressUntil
+    }
+  }, [pixels])
+
+  // While a roll is active, compute an availability plan and attempt a
+  // single-shot set of connects/disconnects for remembered dice needed
+  // by the session. Persist initial connect/disconnect decisions to avoid
+  // repeated expansion across retries.
   useEffect(() => {
     if (!isAwaitingRolls || !rollSession || rollSession.result !== null) {
       return
@@ -1302,6 +1387,9 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     }
   }, [isAwaitingRolls, rollSession, scheduleGlowPrompt])
 
+  // Recompute slot assignments when the set of connected pixels changes
+  // and schedule prompt glows for any newly-assigned pending slots so the
+  // user sees updated assignments immediately.
   useEffect(() => {
     if (!isAwaitingRolls) {
       return
@@ -1348,6 +1436,10 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     }
   }, [connectedPixels, isAwaitingRolls, scheduleGlowPrompt])
 
+  // Periodically trigger prompt glows for pending slots, respecting a
+  // pause window (`glowPauseUntil`). When a pause is active we schedule
+  // an immediate resume for when the pause expires to avoid waiting for
+  // the next interval tick.
   useEffect(() => {
     if (!isAwaitingRolls || !rollSession || rollSession.result !== null) {
       return
@@ -1390,6 +1482,9 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     }
   }, [isAwaitingRolls, rollSession, glowPauseUntil, handlePromptPendingDice])
 
+  // Convert slots to manual entry or mark for reconnect recovery when a
+  // required die type is not connected during an active roll. Updates the
+  // roll session status message accordingly.
   useEffect(() => {
     if (!isAwaitingRolls) {
       return
@@ -1451,6 +1546,9 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
 
   // Detect when previously-connected pixels disconnect during an active
   // roll and enqueue bounded reconnect attempts for those remembered dice.
+  // Detect disconnects that occur during an active roll and enqueue
+  // bounded reconnect attempts for remembered dice that the roll needs.
+  // Also maintain a previous-connection snapshot for change detection.
   useEffect(() => {
     if (!isAwaitingRolls || !rollSession) {
       // Keep prev snapshot in sync outside of rolls

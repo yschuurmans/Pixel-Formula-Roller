@@ -38,6 +38,7 @@ export interface PixelEntry {
   connectionState: 'connected' | 'disconnected';
   batteryLevel: number | null;
   lastFace: number | null;
+  isRolling?: boolean;
 }
 
 export interface RememberedPixelEntry {
@@ -216,7 +217,12 @@ export const useAppStore = create<AppState & AppActions>()(
           ),
         })),
       addPixel: (entry) =>
-        set((state) => ({ pixels: { ...state.pixels, [entry.pixelId]: entry } })),
+        set((state) => ({
+          pixels: {
+            ...state.pixels,
+            [entry.pixelId]: { ...entry, isRolling: entry.isRolling ?? false },
+          },
+        })),
       updatePixelState: (id, updates) =>
         set((state) => {
           const current = state.pixels[id]
