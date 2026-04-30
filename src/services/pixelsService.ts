@@ -913,14 +913,27 @@ export class PixelsService {
         const bytes = event.value
         if (!bytes || bytes.length < 2) return
 
+        // Debug: emit raw notification bytes to help diagnose firmware variants
+        try {
+          nativeLog('d', '[PixelsService] native-notif-raw', pixelId, { bytes: Array.from(bytes) })
+        } catch {}
+
         // Heuristic: detect intermediate "rolling" frames (observed as 0x03 0x03 bursts)
         let rollingFrame = false
+        let matchedPattern: string | null = null
         for (let i = 0; i + 1 < bytes.length; i++) {
           if (bytes[i] === 0x03 && bytes[i + 1] === 0x03) {
             rollingFrame = true
+            matchedPattern = '0x03 0x03'
             break
           }
         }
+
+        // Debug: log rolling-decision so we can correlate with scheduled glows
+        try {
+          nativeLog('d', '[PixelsService] native-notif-rolling', pixelId, { rollingFrame, matchedPattern })
+        } catch {}
+
         if (!rollingFrame) return
 
         let controller = this.rollingControllers.get(pixelId)

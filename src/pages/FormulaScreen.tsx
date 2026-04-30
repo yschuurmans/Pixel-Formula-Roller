@@ -1112,11 +1112,15 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       const storeState = useAppStore.getState()
       const anyRolling = pendingIds.some((id) => storeState.pixels[id]?.isRolling === true)
 
-      if (pendingIds.length === 0 && !anyRolling) {
+      // If none of the pending pixels are currently rolling, schedule a
+      // short resume window so scheduled prompt glows restart after the
+      // quiet period. If any pending pixel is actively rolling, keep
+      // prompts suppressed until an explicit resume.
+      if (!anyRolling) {
         const resumeUntil = Date.now() + ROLL_GLOW_RESUME_DELAY_MS
         setGlowPauseUntil(resumeUntil)
         glowPauseUntilRef.current = resumeUntil
-      } else if (anyRolling) {
+      } else {
         const suppressUntil = Date.now() + ROLL_GLOW_SUPPRESS_WHILE_PENDING_MS
         setGlowPauseUntil(suppressUntil)
         glowPauseUntilRef.current = suppressUntil
@@ -1135,6 +1139,10 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       const suppressUntil = Date.now() + ROLL_GLOW_SUPPRESS_WHILE_PENDING_MS
       setGlowPauseUntil(suppressUntil)
       glowPauseUntilRef.current = suppressUntil
+    } else {
+      const resumeUntil = Date.now() + ROLL_GLOW_RESUME_DELAY_MS
+      setGlowPauseUntil(resumeUntil)
+      glowPauseUntilRef.current = resumeUntil
     }
   }, [pixels])
 
