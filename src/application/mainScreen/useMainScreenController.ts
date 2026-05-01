@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import { createRollHistoryEntry } from '../../pages/formulaHelpers'
+import { rollFormula } from '../../services/characterRoll'
 import { connectDie, glowDie } from '../../services/pixelsService'
 import {
   STORAGE_WARNING_EVENT,
   STORAGE_WARNING_MESSAGE,
   getActiveProfileState,
   type Profile,
+  type ProfileSkill,
   type RollHistoryEntry,
   type SavedFormula,
   useAppStore,
 } from '../../stores/useAppStore'
+import type { EvaluationResult } from '../../types/formula'
 import {
   MainScreenController,
   type MainScreenLocationState,
@@ -17,6 +21,16 @@ import {
 } from './MainScreenController'
 
 const QUICK_CONNECT_HOLD_MS = 500
+
+type CharacterRollMode = 'normal' | 'advantage' | 'disadvantage'
+
+type CharacterRollState = {
+  skill: ProfileSkill
+  mode: CharacterRollMode
+  formulaName: string
+  formulaString: string
+  result: EvaluationResult
+}
 
 export function useMainScreenController() {
   const controller = useMemo(() => new MainScreenController(), [])
@@ -34,6 +48,7 @@ export function useMainScreenController() {
   const renameProfile = useAppStore((state) => state.renameProfile)
   const deleteProfile = useAppStore((state) => state.deleteProfile)
   const selectProfile = useAppStore((state) => state.selectProfile)
+  const addRollHistory = useAppStore((state) => state.addRollHistory)
 
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null)
   const [formulaToDelete, setFormulaToDelete] = useState<SavedFormula | null>(null)
@@ -46,6 +61,8 @@ export function useMainScreenController() {
   const [isHistoryDialogOpen, setIsHistoryDialogOpen] = useState(false)
   const [isQuickConnecting, setIsQuickConnecting] = useState(false)
   const [selectedHistoryEntry, setSelectedHistoryEntry] = useState<RollHistoryEntry | null>(null)
+  const [characterPromptSkill, setCharacterPromptSkill] = useState<ProfileSkill | null>(null)
+  const [characterRollState, setCharacterRollState] = useState<CharacterRollState | null>(null)
   const [toast, setToast] = useState<ToastState | null>(null)
   const toastId = useRef(0)
   const toastTimeoutRef = useRef<number | null>(null)
@@ -66,6 +83,77 @@ export function useMainScreenController() {
   const rollHistory = activeProfile?.history ?? []
   const recentHistory = useMemo(() => controller.getRecentHistory(rollHistory), [controller, rollHistory])
   const fullHistory = useMemo(() => controller.getFullHistory(rollHistory), [controller, rollHistory])
+
+  const closeCharacterPrompt = useCallback(() => {
+    setCharacterPromptSkill(null)
+  }, [])
+
+  const rollCharacterSkill = useCallback(
+    (skill: ProfileSkill, mode: CharacterRollMode = 'normal') => {
+      const formulaString =
+        mode === 'advantage'
+          ? `2d20kh1${skill.modifier >= 0 ? '+' : ''}${skill.modifier}`
+          : mode === 'disadvantage'
+            ? `2d20kl1${skill.modifier >= 0 ? '+' : ''}${skill.modifier}`
+            : `1d20${skill.modifier >= 0 ? '+' : ''}${skill.modifier}`
+
+      const rolled = rollFormula(formulaString)
+      if (!rolled || !activeProfile) {
+        return false
+      }
+
+      const modeLabel = mode === 'normal' ? '' : mode === 'advantage' ? ' (Advantage)' : ' (Disadvantage)'
+      const formulaName = `${activeProfile.name} - ${skill.label}${modeLabel}`
+
+      addRollHistory(createRollHistoryEntry(formulaName, rolled.parsedFormula, rolled.result))
+      setCharacterRollState({
+        skill,
+        mode,
+        formulaName,
+        formulaString: rolled.parsedFormula.canonical,
+        result: rolled.result,
+      })
+
+      return true
+    },
+    [activeProfile, addRollHistory],
+  )
+
+  const handleCharacterSkillTap = useCallback(
+    (skill: ProfileSkill) => {
+      rollCharacterSkill(skill, 'normal')
+      closeCharacterPrompt()
+    },
+    [closeCharacterPrompt, rollCharacterSkill],
+  )
+
+  const handleCharacterSkillLongPress = useCallback((skill: ProfileSkill) => {
+    setCharacterPromptSkill(skill)
+  }, [])
+
+  const handleCharacterPromptChoose = useCallback(
+    (mode: CharacterRollMode) => {
+      if (!characterPromptSkill) {
+        return
+      }
+
+      rollCharacterSkill(characterPromptSkill, mode)
+      closeCharacterPrompt()
+    },
+    [characterPromptSkill, closeCharacterPrompt, rollCharacterSkill],
+  )
+
+  const closeCharacterRollResult = useCallback(() => {
+    setCharacterRollState(null)
+  }, [])
+
+  const rollCharacterAgain = useCallback(() => {
+    if (!characterRollState) {
+      return
+    }
+
+    rollCharacterSkill(characterRollState.skill, characterRollState.mode)
+  }, [characterRollState, rollCharacterSkill])
 
   const openProfileManager = useCallback(() => {
     setProfileError(null)
@@ -309,6 +397,8 @@ export function useMainScreenController() {
     recentHistory,
     savedFormulas,
     selectedHistoryEntry,
+    characterPromptSkill,
+    characterRollState,
     toast,
     openProfileManager,
     closeProfileManager,
@@ -336,6 +426,12 @@ export function useMainScreenController() {
     closeHistoryDialog: () => setIsHistoryDialogOpen(false),
     openHistoryEntry: (entry: RollHistoryEntry) => setSelectedHistoryEntry(entry),
     closeHistoryEntry: () => setSelectedHistoryEntry(null),
+    handleCharacterSkillTap,
+    handleCharacterSkillLongPress,
+    handleCharacterPromptChoose,
+    closeCharacterPrompt,
+    closeCharacterRollResult,
+    rollCharacterAgain,
     handleQuickConnectClick,
     handleQuickConnectHoldStart,
     handleQuickConnectHoldEnd,

@@ -1,6 +1,6 @@
 # STORY-013 — Profiles
 
-Status: backlog
+Status: done
 
 ## Summary
 

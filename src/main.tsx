@@ -6,6 +6,7 @@ import MainScreen from './pages/MainScreen'
 import FormulaScreen from './pages/FormulaScreen'
 import SettingsScreen from './pages/SettingsScreen'
 import ProfileScreen from './pages/ProfileScreen'
+import ProfileEditScreen from './pages/ProfileEditScreen'
 import { initializeBleSupport } from './services/pixelsService'
 import PairedDiceReconnectBridge from './components/PairedDiceReconnectBridge'
 import AndroidBackButtonBridge from './components/AndroidBackButtonBridge'
@@ -42,6 +43,10 @@ const router = createHashRouter([
   {
     path: '/profiles',
     element: <ProfileScreen />,
+  },
+  {
+    path: '/profiles/:id/edit',
+    element: <ProfileEditScreen />,
   },
 ])
 

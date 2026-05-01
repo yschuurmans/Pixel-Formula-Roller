@@ -4,6 +4,9 @@ import {
 } from '../stores/useAppStore'
 import type { DieRollResult } from '../types/formula'
 import DieResultChip from '../components/DieResultChip'
+import CharacterSheet from '../components/CharacterSheet'
+import AdvantagePrompt from '../components/AdvantagePrompt'
+import ResultPanel from '../components/ResultPanel'
 import { displayDieType } from './formulaHelpers'
 import { useMainScreenController } from '../application/mainScreen/useMainScreenController'
 
@@ -191,38 +194,67 @@ export default function MainScreen() {
             )}
           </section>
 
-          <section className="border-2 border-[#8a72a8] bg-[#15111a] p-4 shadow-[6px_6px_0_0_#09070d]">
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <h2 className="text-sm text-[#f7ead4]">Roll History</h2>
-              <button
-                type="button"
-                onClick={vm.openHistoryDialog}
-                className="text-[9px] text-[#c5b7d8] underline underline-offset-2"
-              >
-                See more
-              </button>
-            </div>
+          <div className="space-y-6">
+            {vm.activeProfile?.isCharacter ? (
+              <CharacterSheet
+                profile={vm.activeProfile}
+                onTapSkill={vm.handleCharacterSkillTap}
+                onLongPressSkill={vm.handleCharacterSkillLongPress}
+              />
+            ) : null}
 
-            {vm.recentHistory.length === 0 ? (
-              <div className="border-2 border-dashed border-[#5d4a7a] bg-[#1b1522] px-4 py-8 text-center text-[10px] text-[#c5b7d8]">
-                No rolls yet
+            <section className="border-2 border-[#8a72a8] bg-[#15111a] p-4 shadow-[6px_6px_0_0_#09070d]">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <h2 className="text-sm text-[#f7ead4]">Roll History</h2>
+                <button
+                  type="button"
+                  onClick={vm.openHistoryDialog}
+                  className="text-[9px] text-[#c5b7d8] underline underline-offset-2"
+                >
+                  See more
+                </button>
               </div>
-            ) : (
-              <ol className="space-y-3">
-                {vm.recentHistory.map((entry) => (
-                  <HistoryItem
-                    key={entry.id}
-                    label={entry.formulaName || entry.formulaString}
-                    total={entry.total}
-                    rolledAt={entry.rolledAt}
-                    onClick={() => vm.openHistoryEntry(entry)}
-                  />
-                ))}
-              </ol>
-            )}
-          </section>
+
+              {vm.recentHistory.length === 0 ? (
+                <div className="border-2 border-dashed border-[#5d4a7a] bg-[#1b1522] px-4 py-8 text-center text-[10px] text-[#c5b7d8]">
+                  No rolls yet
+                </div>
+              ) : (
+                <ol className="space-y-3">
+                  {vm.recentHistory.map((entry) => (
+                    <HistoryItem
+                      key={entry.id}
+                      label={entry.formulaName || entry.formulaString}
+                      total={entry.total}
+                      rolledAt={entry.rolledAt}
+                      onClick={() => vm.openHistoryEntry(entry)}
+                    />
+                  ))}
+                </ol>
+              )}
+            </section>
+          </div>
         </div>
       </div>
+
+      <AdvantagePrompt
+        open={vm.characterPromptSkill !== null}
+        skill={vm.characterPromptSkill}
+        modifier={vm.characterPromptSkill?.modifier ?? 0}
+        onChoose={vm.handleCharacterPromptChoose}
+        onClose={vm.closeCharacterPrompt}
+      />
+
+      {vm.characterRollState && vm.activeProfile ? (
+        <ResultPanel
+          open
+          formulaName={vm.characterRollState.formulaName}
+          formulaString={vm.characterRollState.formulaString}
+          result={vm.characterRollState.result}
+          onClose={vm.closeCharacterRollResult}
+          onRollAgain={vm.rollCharacterAgain}
+        />
+      ) : null}
 
       {vm.isProfileManagerOpen ? (
         <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/75 px-4">

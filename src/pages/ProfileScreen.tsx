@@ -4,81 +4,40 @@ import type { Profile } from '../stores/useAppStore'
 function ProfileCard({
   profile,
   isActive,
-  isEditing,
-  editValue,
-  editError,
-  onEditValue,
-  onBeginRename,
-  onCancelRename,
-  onSaveRename,
   onDelete,
   onSelect,
+  onEdit,
 }: {
   profile: Profile
   isActive: boolean
-  isEditing: boolean
-  editValue: string
-  editError: string | null
-  onEditValue: (value: string) => void
-  onBeginRename: () => void
-  onCancelRename: () => void
-  onSaveRename: () => void
   onDelete: () => void
   onSelect: () => void
+  onEdit: () => void
 }) {
   return (
     <article className={`border-2 bg-[#1b1522] p-4 shadow-[5px_5px_0_0_#09070d] ${isActive ? 'border-[#86efac]' : 'border-[#5d4a7a]'}`}>
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div className="min-w-0 flex-1">
-          {isEditing ? (
-            <div>
-              <label htmlFor={`profile-name-${profile.id}`} className="block text-[9px] uppercase tracking-[0.16em] text-[#c5b7d8]">
-                Rename profile
-              </label>
-              <input
-                id={`profile-name-${profile.id}`}
-                value={editValue}
-                onChange={(event) => onEditValue(event.target.value)}
-                className="mt-3 w-full border-2 border-[#7d6b95] bg-[#120e17] px-3 py-3 text-[10px] text-[#f7ead4] outline-none"
-              />
-              {editError ? <p className="mt-3 text-[10px] text-[#ff9aa2]">{editError}</p> : null}
-            </div>
-          ) : (
-            <>
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="text-sm text-[#f7ead4]">{profile.name}</h3>
-                {isActive ? <span className="border border-[#86efac] px-2 py-1 text-[9px] text-[#d7ffe5]">Active</span> : null}
-              </div>
-              <p className="mt-2 text-[9px] text-[#c5b7d8]">
-                {(profile.formulas?.length ?? 0)} formulas · {(profile.history?.length ?? 0)} rolls
-              </p>
-            </>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm text-[#f7ead4]">{profile.name}</h3>
+            {isActive ? <span className="border border-[#86efac] px-2 py-1 text-[9px] text-[#d7ffe5]">Active</span> : null}
+            {profile.isCharacter ? <span className="border border-[#7dd3fc] px-2 py-1 text-[9px] text-[#d9f3ff]">Character</span> : null}
+          </div>
+          <p className="mt-2 text-[9px] text-[#c5b7d8]">
+            {(profile.formulas?.length ?? 0)} formulas · {(profile.history?.length ?? 0)} rolls
+          </p>
         </div>
 
         <div className="flex flex-wrap gap-3">
-          {isEditing ? (
-            <>
-              <button type="button" onClick={onCancelRename} className="border-2 border-[#7d6b95] bg-[#251d2e] px-4 py-3 text-[10px] text-[#f7ead4]">
-                Cancel
-              </button>
-              <button type="button" onClick={onSaveRename} className="border-2 border-[#86efac] bg-[#17301f] px-4 py-3 text-[10px] text-[#d7ffe5]">
-                Save
-              </button>
-            </>
-          ) : (
-            <>
-              <button type="button" onClick={onSelect} disabled={isActive} className="border-2 border-[#7dd3fc] bg-[#102a3a] px-4 py-3 text-[10px] text-[#d9f3ff] disabled:cursor-not-allowed disabled:border-[#4b5b63] disabled:bg-[#21272a] disabled:text-[#8d9aa0]">
-                {isActive ? 'Selected' : 'Select'}
-              </button>
-              <button type="button" onClick={onBeginRename} className="border-2 border-[#f8a5c2] bg-[#351826] px-4 py-3 text-[10px] text-[#ffe0ec]">
-                Rename
-              </button>
-              <button type="button" onClick={onDelete} className="border-2 border-[#ff9aa2] bg-[#4a1515] px-4 py-3 text-[10px] text-[#ffe1e1]">
-                Delete
-              </button>
-            </>
-          )}
+          <button type="button" onClick={onSelect} disabled={isActive} className="border-2 border-[#7dd3fc] bg-[#102a3a] px-4 py-3 text-[10px] text-[#d9f3ff] disabled:cursor-not-allowed disabled:border-[#4b5b63] disabled:bg-[#21272a] disabled:text-[#8d9aa0]">
+            {isActive ? 'Selected' : 'Select'}
+          </button>
+          <button type="button" onClick={onEdit} className="border-2 border-[#f8a5c2] bg-[#351826] px-4 py-3 text-[10px] text-[#ffe0ec]">
+            Edit
+          </button>
+          <button type="button" onClick={onDelete} className="border-2 border-[#ff9aa2] bg-[#4a1515] px-4 py-3 text-[10px] text-[#ffe1e1]">
+            Delete
+          </button>
         </div>
       </div>
     </article>
@@ -151,15 +110,9 @@ export default function ProfileScreen() {
                   key={profile.id}
                   profile={profile}
                   isActive={profile.id === vm.activeProfile?.id}
-                  isEditing={vm.editingProfile?.id === profile.id}
-                  editValue={vm.editingProfile?.id === profile.id ? vm.editingProfileName : profile.name}
-                  editError={vm.editingProfile?.id === profile.id ? vm.editingProfileError : null}
-                  onEditValue={vm.setEditingProfileName}
-                  onBeginRename={() => vm.handleBeginRename(profile)}
-                  onCancelRename={vm.handleCancelRename}
-                  onSaveRename={vm.handleSaveRename}
                   onDelete={() => vm.handleRequestDelete(profile)}
                   onSelect={() => vm.handleSelectProfile(profile.id)}
+                  onEdit={() => vm.handleOpenProfileEditor(profile.id)}
                 />
               ))}
             </div>

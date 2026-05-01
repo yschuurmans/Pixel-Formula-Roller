@@ -1,6 +1,9 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
-import type { DieType, EvaluationResult, ParsedFormula } from '../types/formula';
+import type { DieType } from '../types/formula';
+import type { Profile, ProfileSkill, RollHistoryEntry, SavedFormula } from '../types/profile';
+
+export type { Profile, ProfileSkill, RollHistoryEntry, SavedFormula } from '../types/profile';
 
 export const STORAGE_WARNING_EVENT = 'pixel-formula-roller:storage-warning';
 export const STORAGE_WARNING_MESSAGE = 'Storage full - oldest history entries will be removed';
@@ -17,24 +20,6 @@ type PersistedAppState = Pick<
   | 'pairedPixelIds'
   | 'pairedPixels'
 >;
-
-export interface SavedFormula {
-  id: string;
-  name: string;
-  formula: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface RollHistoryEntry {
-  id: string;
-  formulaName: string;
-  formulaString: string;
-  total: number;
-  rolledAt: number;
-  result: EvaluationResult;
-  parsedFormula: ParsedFormula;
-}
 
 export interface AppSettings {
   theme: 'dark';
@@ -54,15 +39,6 @@ export interface RememberedPixelEntry {
   pixelId: string;
   dieType: DieType;
   lastUsedAt: number | null;
-}
-
-export interface Profile {
-  id: string;
-  name: string;
-  formulas: SavedFormula[];
-  history: RollHistoryEntry[];
-  createdAt: number;
-  updatedAt: number;
 }
 
 interface AppState {
@@ -87,6 +63,12 @@ interface AppActions {
   clearRollHistory: () => void;
   createProfile: (name: string) => string | null;
   renameProfile: (profileId: string, name: string) => boolean;
+  setProfileCharacterMode: (profileId: string, isCharacter: boolean) => boolean;
+  addProfileSkill: (profileId: string, skill?: Partial<ProfileSkill>) => string | null;
+  updateProfileSkillLabel: (profileId: string, skillId: string, label: string) => boolean;
+  updateProfileSkillModifier: (profileId: string, skillId: string, modifier: number) => boolean;
+  removeProfileSkill: (profileId: string, skillId: string) => boolean;
+  reorderProfileSkills: (profileId: string, activeSkillId: string, overSkillId: string) => boolean;
   deleteProfile: (profileId: string) => boolean;
   selectProfile: (profileId: string) => boolean;
   rememberPairedPixelId: (pixelId: string) => void;
@@ -106,6 +88,33 @@ const defaultSettings: AppSettings = {
   highlightLowBattery: false,
 };
 
+const DEFAULT_CHARACTER_SKILLS: Array<Pick<ProfileSkill, 'label' | 'modifier'>> = [
+  { label: 'STR', modifier: 0 },
+  { label: 'DEX', modifier: 0 },
+  { label: 'CON', modifier: 0 },
+  { label: 'INT', modifier: 0 },
+  { label: 'WIS', modifier: 0 },
+  { label: 'CHA', modifier: 0 },
+  { label: 'Acrobatics', modifier: 0 },
+  { label: 'Animal Handling', modifier: 0 },
+  { label: 'Arcana', modifier: 0 },
+  { label: 'Athletics', modifier: 0 },
+  { label: 'Deception', modifier: 0 },
+  { label: 'History', modifier: 0 },
+  { label: 'Insight', modifier: 0 },
+  { label: 'Intimidation', modifier: 0 },
+  { label: 'Investigation', modifier: 0 },
+  { label: 'Medicine', modifier: 0 },
+  { label: 'Nature', modifier: 0 },
+  { label: 'Perception', modifier: 0 },
+  { label: 'Performance', modifier: 0 },
+  { label: 'Persuasion', modifier: 0 },
+  { label: 'Religion', modifier: 0 },
+  { label: 'Sleight of Hand', modifier: 0 },
+  { label: 'Stealth', modifier: 0 },
+  { label: 'Survival', modifier: 0 },
+];
+
 function createProfileId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
@@ -114,12 +123,32 @@ function createProfileId(): string {
   return `profile-${Date.now()}`;
 }
 
+function createSkillId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+
+  return `skill-${Date.now()}`;
+}
+
+function createDefaultCharacterSkills(): ProfileSkill[] {
+  return DEFAULT_CHARACTER_SKILLS.map((skill) => ({
+    id: createSkillId(),
+    label: skill.label,
+    modifier: skill.modifier,
+  }));
+}
+
 function createProfileRecord(name: string, overrides: Partial<Profile> = {}): Profile {
   const now = overrides.updatedAt ?? overrides.createdAt ?? Date.now();
+  const isCharacter = overrides.isCharacter ?? false;
+  const skills = overrides.skills ? overrides.skills.map((skill) => ({ ...skill })) : [];
 
   return {
     id: overrides.id ?? createProfileId(),
     name: name.trim() || PROFILE_DEFAULT_NAME,
+    isCharacter,
+    skills: isCharacter && skills.length === 0 ? createDefaultCharacterSkills() : skills,
     formulas: overrides.formulas ?? [],
     history: (overrides.history ?? []).slice(0, ROLL_HISTORY_STORAGE_LIMIT),
     createdAt: overrides.createdAt ?? now,
@@ -141,12 +170,18 @@ function normalizeProfile(
     history?: RollHistoryEntry[];
     savedFormulas?: SavedFormula[];
     rollHistory?: RollHistoryEntry[];
+    skills?: ProfileSkill[];
   } = {},
 ): Profile {
+  const isCharacter = profile.isCharacter ?? false;
+  const skills = profile.skills ? profile.skills.map((skill) => ({ ...skill })) : [];
+
   return createProfileRecord(profile.name ?? PROFILE_DEFAULT_NAME, {
     id: profile.id ?? profileId,
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
+    isCharacter,
+    skills: isCharacter && skills.length === 0 ? createDefaultCharacterSkills() : skills,
     formulas: profile.formulas ?? profile.savedFormulas ?? [],
     history: (profile.history ?? profile.rollHistory ?? []).slice(0, ROLL_HISTORY_STORAGE_LIMIT),
   });
@@ -397,6 +432,219 @@ export const useAppStore = create<AppState & AppActions>()(
 
         return renamed;
       },
+      setProfileCharacterMode: (profileId, isCharacter) => {
+        let updated = false;
+
+        set((state) => {
+          const profile = state.profiles[profileId];
+          if (!profile || profile.isCharacter === isCharacter) {
+            return state;
+          }
+
+          updated = true;
+          const nextProfile = {
+            ...profile,
+            isCharacter,
+            skills: isCharacter && profile.skills.length === 0 ? createDefaultCharacterSkills() : profile.skills,
+            updatedAt: Date.now(),
+          };
+
+          return {
+            ...state,
+            profiles: {
+              ...state.profiles,
+              [profileId]: nextProfile,
+            },
+            ...(state.activeProfileId === profileId ? getProfileView(nextProfile) : {}),
+          };
+        });
+
+        return updated;
+      },
+      addProfileSkill: (profileId, skill = {}) => {
+        let createdSkillId: string | null = null;
+
+        set((state) => {
+          const profile = state.profiles[profileId];
+          if (!profile) {
+            return state;
+          }
+
+          const nextSkill = {
+            id: skill.id ?? createSkillId(),
+            label: skill.label?.trim() || 'New Skill',
+            modifier: Number.isFinite(skill.modifier) ? Math.trunc(skill.modifier as number) : 0,
+          } satisfies ProfileSkill;
+
+          createdSkillId = nextSkill.id;
+          const nextProfile = {
+            ...profile,
+            isCharacter: true,
+            skills: [...profile.skills, nextSkill],
+            updatedAt: Date.now(),
+          };
+
+          return {
+            ...state,
+            profiles: {
+              ...state.profiles,
+              [profileId]: nextProfile,
+            },
+            ...(state.activeProfileId === profileId ? getProfileView(nextProfile) : {}),
+          };
+        });
+
+        return createdSkillId;
+      },
+      updateProfileSkillLabel: (profileId, skillId, label) => {
+        let updated = false;
+
+        set((state) => {
+          const profile = state.profiles[profileId];
+          if (!profile) {
+            return state;
+          }
+
+          const trimmedLabel = label.trim();
+          if (trimmedLabel === '') {
+            return state;
+          }
+
+          const nextSkills = profile.skills.map((skill) => (skill.id === skillId ? { ...skill, label: trimmedLabel } : skill));
+          const changed = nextSkills.some((skill, index) => skill !== profile.skills[index]);
+          if (!changed) {
+            return state;
+          }
+
+          updated = true;
+          const nextProfile = {
+            ...profile,
+            isCharacter: true,
+            skills: nextSkills,
+            updatedAt: Date.now(),
+          };
+
+          return {
+            ...state,
+            profiles: {
+              ...state.profiles,
+              [profileId]: nextProfile,
+            },
+            ...(state.activeProfileId === profileId ? getProfileView(nextProfile) : {}),
+          };
+        });
+
+        return updated;
+      },
+      updateProfileSkillModifier: (profileId, skillId, modifier) => {
+        let updated = false;
+
+        set((state) => {
+          const profile = state.profiles[profileId];
+          if (!profile) {
+            return state;
+          }
+
+          const nextModifier = Number.isFinite(modifier) ? Math.trunc(modifier) : 0;
+          const nextSkills = profile.skills.map((skill) => (skill.id === skillId ? { ...skill, modifier: nextModifier } : skill));
+          const changed = nextSkills.some((skill, index) => skill !== profile.skills[index]);
+          if (!changed) {
+            return state;
+          }
+
+          updated = true;
+          const nextProfile = {
+            ...profile,
+            isCharacter: true,
+            skills: nextSkills,
+            updatedAt: Date.now(),
+          };
+
+          return {
+            ...state,
+            profiles: {
+              ...state.profiles,
+              [profileId]: nextProfile,
+            },
+            ...(state.activeProfileId === profileId ? getProfileView(nextProfile) : {}),
+          };
+        });
+
+        return updated;
+      },
+      removeProfileSkill: (profileId, skillId) => {
+        let removed = false;
+
+        set((state) => {
+          const profile = state.profiles[profileId];
+          if (!profile) {
+            return state;
+          }
+
+          const nextSkills = profile.skills.filter((skill) => skill.id !== skillId);
+          if (nextSkills.length === profile.skills.length) {
+            return state;
+          }
+
+          removed = true;
+          const nextProfile = {
+            ...profile,
+            isCharacter: true,
+            skills: nextSkills,
+            updatedAt: Date.now(),
+          };
+
+          return {
+            ...state,
+            profiles: {
+              ...state.profiles,
+              [profileId]: nextProfile,
+            },
+            ...(state.activeProfileId === profileId ? getProfileView(nextProfile) : {}),
+          };
+        });
+
+        return removed;
+      },
+      reorderProfileSkills: (profileId, activeSkillId, overSkillId) => {
+        let reordered = false;
+
+        set((state) => {
+          const profile = state.profiles[profileId];
+          if (!profile || activeSkillId === overSkillId) {
+            return state;
+          }
+
+          const fromIndex = profile.skills.findIndex((skill) => skill.id === activeSkillId);
+          const toIndex = profile.skills.findIndex((skill) => skill.id === overSkillId);
+          if (fromIndex < 0 || toIndex < 0) {
+            return state;
+          }
+
+          const nextSkills = [...profile.skills];
+          const [movedSkill] = nextSkills.splice(fromIndex, 1);
+          nextSkills.splice(toIndex, 0, movedSkill);
+
+          reordered = true;
+          const nextProfile = {
+            ...profile,
+            isCharacter: true,
+            skills: nextSkills,
+            updatedAt: Date.now(),
+          };
+
+          return {
+            ...state,
+            profiles: {
+              ...state.profiles,
+              [profileId]: nextProfile,
+            },
+            ...(state.activeProfileId === profileId ? getProfileView(nextProfile) : {}),
+          };
+        });
+
+        return reordered;
+      },
       deleteProfile: (profileId) => {
         let deleted = false;
 
@@ -534,6 +782,7 @@ export const useAppStore = create<AppState & AppActions>()(
             history?: RollHistoryEntry[];
             savedFormulas?: SavedFormula[];
             rollHistory?: RollHistoryEntry[];
+            skills?: ProfileSkill[];
           }>;
         }) | undefined;
 

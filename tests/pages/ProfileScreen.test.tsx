@@ -14,6 +14,7 @@ function renderProfileScreen() {
     <MemoryRouter initialEntries={['/profiles']}>
       <Routes>
         <Route path="/profiles" element={<><ProfileScreen /><LocationDisplay /></>} />
+        <Route path="/profiles/:id/edit" element={<LocationDisplay />} />
         <Route path="/" element={<LocationDisplay />} />
       </Routes>
     </MemoryRouter>,
@@ -27,6 +28,8 @@ function resetStore() {
       default: {
         id: 'default',
         name: 'Default',
+        isCharacter: false,
+        skills: [],
         formulas: [],
         history: [],
         createdAt: 1,
@@ -51,7 +54,7 @@ describe('ProfileScreen', () => {
     vi.useRealTimers()
   })
 
-  it('creates, renames, and deletes profiles', () => {
+  it('creates and deletes profiles', () => {
     renderProfileScreen()
 
     fireEvent.change(screen.getByLabelText('Name'), {
@@ -63,20 +66,26 @@ describe('ProfileScreen', () => {
     expect(useAppStore.getState().activeProfileId).not.toBe('default')
 
     const activeCard = screen.getByText('Campaign A').closest('article')!
-    fireEvent.click(within(activeCard).getByRole('button', { name: 'Rename' }))
-
-    fireEvent.change(screen.getByDisplayValue('Campaign A'), {
-      target: { value: 'Campaign B' },
-    })
-    fireEvent.click(within(activeCard).getByRole('button', { name: 'Save' }))
-
-    expect(screen.getByText('Campaign B')).toBeInTheDocument()
-
     fireEvent.click(within(activeCard).getByRole('button', { name: 'Delete' }))
     const dialog = screen.getByRole('dialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
 
     expect(useAppStore.getState().activeProfileId).toBe('default')
     expect(screen.getByText('Active profile: Default')).toBeInTheDocument()
+  })
+
+  it('navigates to the dedicated edit screen', () => {
+    renderProfileScreen()
+
+    fireEvent.change(screen.getByLabelText('Name'), {
+      target: { value: 'Character A' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+
+    const activeCard = screen.getByText('Character A').closest('article')!
+    fireEvent.click(within(activeCard).getByRole('button', { name: 'Edit' }))
+
+    expect(screen.getByTestId('location')).toHaveTextContent('/profiles/')
+    expect(screen.getByTestId('location')).toHaveTextContent('/edit')
   })
 })

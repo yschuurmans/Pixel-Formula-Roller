@@ -29,6 +29,8 @@ function resetStore() {
       default: {
         id: 'default',
         name: 'Default',
+        isCharacter: false,
+        skills: [],
         formulas: [],
         history: [],
         createdAt: 1,
@@ -68,6 +70,8 @@ describe('useAppStore persistence', () => {
         default: {
           id: 'default',
           name: 'Default',
+          isCharacter: false,
+          skills: [],
           formulas: [],
           history: Array.from({ length: 30 }, (_, index) => baseHistoryEntry(String(index + 1))),
           createdAt: 1,
@@ -119,6 +123,29 @@ describe('useAppStore persistence', () => {
     expect(migrated?.pairedPixelIds).toEqual(['pixel-1'])
   })
 
+  it('seeds character skills during migration when a profile is already marked as a character', async () => {
+    const migrate = useAppStore.persist.getOptions().migrate
+
+    const migrated = await migrate?.(
+      {
+        profiles: {
+          default: {
+            id: 'default',
+            name: 'Default',
+            isCharacter: true,
+            formulas: [],
+            history: [],
+          },
+        },
+        activeProfileId: 'default',
+      },
+      4,
+    )
+
+    expect(migrated?.profiles?.default?.isCharacter).toBe(true)
+    expect(migrated?.profiles?.default?.skills).toHaveLength(24)
+  })
+
   it('creates, renames, selects, and deletes profiles without removing the last one', () => {
     const createdId = useAppStore.getState().createProfile('Campaign A')
 
@@ -155,5 +182,37 @@ describe('useAppStore persistence', () => {
     useAppStore.getState().addRollHistory(baseHistoryEntry('active'))
     expect(useAppStore.getState().profiles[createdId!].history).toHaveLength(1)
     expect(useAppStore.getState().profiles.default.history).toHaveLength(0)
+  })
+
+  it('manages character skills and auto-seeds when character mode is enabled', () => {
+    const profileId = useAppStore.getState().createProfile('Character Sheet')
+    expect(profileId).not.toBeNull()
+
+    expect(useAppStore.getState().setProfileCharacterMode(profileId!, true)).toBe(true)
+    expect(useAppStore.getState().profiles[profileId!].isCharacter).toBe(true)
+    expect(useAppStore.getState().profiles[profileId!].skills).toHaveLength(24)
+
+    const addedSkillId = useAppStore.getState().addProfileSkill(profileId!, { label: 'Cooking', modifier: 2 })
+    expect(addedSkillId).not.toBeNull()
+    expect(useAppStore.getState().profiles[profileId!].skills.at(-1)).toMatchObject({
+      id: addedSkillId,
+      label: 'Cooking',
+      modifier: 2,
+    })
+
+    const firstSkillId = useAppStore.getState().profiles[profileId!].skills[0].id
+    expect(useAppStore.getState().updateProfileSkillLabel(profileId!, firstSkillId, 'Strength')).toBe(true)
+    expect(useAppStore.getState().updateProfileSkillModifier(profileId!, firstSkillId, 4)).toBe(true)
+    expect(useAppStore.getState().profiles[profileId!].skills[0]).toMatchObject({
+      label: 'Strength',
+      modifier: 4,
+    })
+
+    const secondSkillId = useAppStore.getState().profiles[profileId!].skills[1].id
+    expect(useAppStore.getState().reorderProfileSkills(profileId!, secondSkillId, firstSkillId)).toBe(true)
+    expect(useAppStore.getState().profiles[profileId!].skills[0].id).toBe(secondSkillId)
+
+    expect(useAppStore.getState().removeProfileSkill(profileId!, firstSkillId)).toBe(true)
+    expect(useAppStore.getState().profiles[profileId!].skills.some((skill) => skill.id === firstSkillId)).toBe(false)
   })
 })

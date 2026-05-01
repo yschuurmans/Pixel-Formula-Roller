@@ -9,7 +9,6 @@ export function useProfileScreenController() {
   const profiles = useAppStore((state) => state.profiles)
   const activeProfileId = useAppStore((state) => state.activeProfileId)
   const createProfile = useAppStore((state) => state.createProfile)
-  const renameProfile = useAppStore((state) => state.renameProfile)
   const deleteProfile = useAppStore((state) => state.deleteProfile)
   const selectProfile = useAppStore((state) => state.selectProfile)
 
@@ -21,9 +20,6 @@ export function useProfileScreenController() {
 
   const [newProfileName, setNewProfileName] = useState('')
   const [newProfileError, setNewProfileError] = useState<string | null>(null)
-  const [editingProfile, setEditingProfile] = useState<Profile | null>(null)
-  const [editingProfileName, setEditingProfileName] = useState('')
-  const [editingProfileError, setEditingProfileError] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Profile | null>(null)
 
   const handleCreateProfile = useCallback(() => {
@@ -50,37 +46,9 @@ export function useProfileScreenController() {
     [selectProfile],
   )
 
-  const handleBeginRename = useCallback((profile: Profile) => {
-    setEditingProfile(profile)
-    setEditingProfileName(profile.name)
-    setEditingProfileError(null)
-  }, [])
-
-  const handleCancelRename = useCallback(() => {
-    setEditingProfile(null)
-    setEditingProfileName('')
-    setEditingProfileError(null)
-  }, [])
-
-  const handleSaveRename = useCallback(() => {
-    if (!editingProfile) {
-      return
-    }
-
-    const error = controller.getRenameError(editingProfileName, editingProfile.id, profiles)
-    if (error) {
-      setEditingProfileError(error)
-      return
-    }
-
-    const renamed = renameProfile(editingProfile.id, editingProfileName)
-    if (!renamed) {
-      setEditingProfileError('Unable to rename profile')
-      return
-    }
-
-    handleCancelRename()
-  }, [controller, editingProfile, editingProfileName, handleCancelRename, profiles, renameProfile])
+  const handleOpenProfileEditor = useCallback((profileId: string) => {
+    navigate(`/profiles/${profileId}/edit`)
+  }, [navigate])
 
   const handleRequestDelete = useCallback((profile: Profile) => {
     setDeleteTarget(profile)
@@ -112,23 +80,17 @@ export function useProfileScreenController() {
     activeProfile,
     activeProfileLabel: controller.getActiveProfileLabel(activeProfile),
     deleteTarget,
-    editingProfile,
-    editingProfileError,
-    editingProfileName,
     isDeleteDisabled,
     navigateHome,
     newProfileError,
     newProfileName,
     profileList,
-    setEditingProfileName,
     setNewProfileName,
-    handleBeginRename,
     handleCancelDelete,
-    handleCancelRename,
     handleConfirmDelete,
     handleCreateProfile,
+    handleOpenProfileEditor,
     handleRequestDelete,
-    handleSaveRename,
     handleSelectProfile,
   }
 }
