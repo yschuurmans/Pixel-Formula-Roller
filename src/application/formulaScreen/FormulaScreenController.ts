@@ -1,4 +1,4 @@
-import type { SavedFormula } from '../../stores/useAppStore'
+import type { RememberedPixelEntry, SavedFormula } from '../../stores/useAppStore'
 import type { DieType, EvaluationResult, ParsedFormula } from '../../types/formula'
 import { buildRollSlots, createEmptyBuilderState, getKeepError, normalizeFormulaState, toDisplayedRolls, type FormulaBuilderState, type KeepMode } from '../rollHelpers'
 import { getGlowPixelIdsForSlots, promoteRecoverableManualSlots, type ConnectedPixel, type RollSlot } from '../../pages/availabilityHelpers'
@@ -294,7 +294,7 @@ export class FormulaScreenController {
     formulaText: string,
     parsedFormula: ParsedFormula,
     connectedPixels: ConnectedPixel[],
-    pairedPixels: Record<string, { pixelId: string; dieType: DieType; lastUsedAt?: number }>,
+    pairedPixels: Record<string, RememberedPixelEntry>,
     sessionId: string,
   ): { session: RollSession; pixelIdsToGlow: string[] } {
     const slots = promoteRecoverableManualSlots(buildRollSlots(formulaText, connectedPixels), pairedPixels)
