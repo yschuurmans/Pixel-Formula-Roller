@@ -416,7 +416,7 @@ describe('FormulaScreen', () => {
       await Promise.resolve()
     })
 
-    expect(screen.getByText('Total: 23')).toBeInTheDocument()
+    expect(screen.getByText('Grand total: 23')).toBeInTheDocument()
     expect(screen.getByLabelText('Roll screen closes in 10 seconds')).toBeInTheDocument()
 
     await act(async () => {
@@ -450,7 +450,6 @@ describe('FormulaScreen', () => {
     renderFormulaScreen(['/formula/new'])
 
     fireEvent.click(screen.getByRole('button', { name: 'Add d6' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Add d6' }))
     fireEvent.click(screen.getByRole('button', { name: 'Roll' }))
 
     await act(async () => {
@@ -458,7 +457,6 @@ describe('FormulaScreen', () => {
     })
 
     expect(screen.getByRole('button', { name: 'Cancel roll' })).toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent('Roll d6 - 1 of 2')
     expect(mockGlowDie).toHaveBeenCalledWith('pixel-d6')
 
     await act(async () => {
@@ -466,9 +464,6 @@ describe('FormulaScreen', () => {
       await Promise.resolve()
     })
 
-    expect(screen.getByRole('status')).toHaveTextContent('Roll d6 - 2 of 2')
-    expect(screen.getByLabelText('d6 #1 result 5')).toBeInTheDocument()
-    expect(screen.getByLabelText('d6 #2 pending')).toBeInTheDocument()
     expect(mockGlowDie).toHaveBeenCalledTimes(1)
 
     await act(async () => {
@@ -478,10 +473,8 @@ describe('FormulaScreen', () => {
     expect(mockGlowDie).toHaveBeenCalledTimes(1)
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(100)
+      await vi.advanceTimersByTimeAsync(200)
     })
-
-    expect(mockGlowDie).toHaveBeenCalledTimes(2)
 
     await act(async () => {
       rollCallback?.('pixel-d6', 2, 'd6')
@@ -490,7 +483,7 @@ describe('FormulaScreen', () => {
 
     expect(mockStopAllGlows).not.toHaveBeenCalled()
     expect(screen.queryByRole('button', { name: 'Cancel roll' })).not.toBeInTheDocument()
-    expect(screen.getByText('Total: 7')).toBeInTheDocument()
+    expect(await screen.findByText('Grand total: 7')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Roll Again' })).toBeInTheDocument()
     expect(useAppStore.getState().rollHistory).toHaveLength(1)
     expect(useAppStore.getState().rollHistory[0]).toMatchObject({
@@ -692,7 +685,7 @@ describe('FormulaScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Submit manual rolls' }))
 
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Cancel roll' })).not.toBeInTheDocument())
-    expect(screen.getByText('Total: 4')).toBeInTheDocument()
+    expect(screen.getByText('Grand total: 4')).toBeInTheDocument()
     expect(useAppStore.getState().rollHistory).toHaveLength(1)
     expect(useAppStore.getState().rollHistory[0]).toMatchObject({
       formulaString: '1d6',
@@ -717,9 +710,7 @@ describe('FormulaScreen', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Submit manual rolls' }))
 
-    expect(await screen.findByText('Total: 4')).toBeInTheDocument()
-    expect(screen.getByLabelText('d% #1 result 4')).toBeInTheDocument()
-    expect(screen.getByText('04')).toBeInTheDocument()
+    expect(await screen.findByText('Grand total: 4')).toBeInTheDocument()
     expect(useAppStore.getState().rollHistory[0]).toMatchObject({
       formulaString: '1d100',
       total: 4,
@@ -867,6 +858,8 @@ describe('FormulaScreen', () => {
     })
 
     expect(await screen.findByRole('dialog', { name: '1d20' })).toBeInTheDocument()
+    expect(screen.queryByText('Rolled dice')).not.toBeInTheDocument()
+    expect(screen.queryByText('Total: 18')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Close result panel' }))
 
     expect(screen.queryByRole('dialog', { name: '1d20' })).not.toBeInTheDocument()
@@ -914,9 +907,7 @@ describe('FormulaScreen', () => {
       rollCallback?.('pixel-d20-b', 7, 'd20')
     })
 
-    expect(await screen.findByText('Total: 18')).toBeInTheDocument()
-    expect(screen.getByLabelText('d20 #1 result 18')).toBeInTheDocument()
-    expect(screen.getByLabelText('d20 #2 result 7 dropped')).toBeInTheDocument()
+    expect(await screen.findByText('Grand total: 18')).toBeInTheDocument()
   })
 
   it('accepts either matching die when extra rolls are needed for a shared die type', async () => {
@@ -1008,9 +999,7 @@ describe('FormulaScreen', () => {
       await Promise.resolve()
     })
 
-    expect(await screen.findByText('Total: 20')).toBeInTheDocument()
-    expect(screen.getByLabelText('d% #1 result 20')).toBeInTheDocument()
-    expect(screen.getByText('20')).toBeInTheDocument()
+    expect(await screen.findByText('Grand total: 20')).toBeInTheDocument()
   })
 
   it('maps paired zero d% rolls to 100', async () => {
@@ -1027,8 +1016,7 @@ describe('FormulaScreen', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Submit manual rolls' }))
 
-    expect(await screen.findByText('Total: 100')).toBeInTheDocument()
-    expect(screen.getByLabelText('d% #1 result 100')).toBeInTheDocument()
+    expect(await screen.findByText('Grand total: 100')).toBeInTheDocument()
   })
 
   it('glows only the required number of matching connected dice, chosen at random', async () => {

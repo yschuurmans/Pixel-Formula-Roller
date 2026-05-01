@@ -12,6 +12,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$androidDir = Join-Path $repoRoot 'android'
 
 
 function Set-DeployEnvironment {
@@ -80,6 +81,15 @@ switch ($Mode) {
 
             & npx cap sync android
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+            Push-Location $androidDir
+            try {
+                & .\gradlew.bat app:assembleDebug
+                if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
+            finally {
+                Pop-Location
+            }
 
             & adb devices -l
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

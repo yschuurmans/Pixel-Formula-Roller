@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { EvaluationResult, DieRollResult } from '../types/formula'
 import formatRollLabel from '../utils/formatRollLabel'
+import { AutoHideCountdown } from '../pages/formulaHelpers'
 
 export default function ResultPanel({
   open,
@@ -10,6 +11,8 @@ export default function ResultPanel({
   onRollAgain,
   onClose,
   variant,
+  autoHideRemainingMs,
+  autoHideDurationMs,
 }: {
   open: boolean
   formulaName?: string
@@ -18,6 +21,8 @@ export default function ResultPanel({
   onRollAgain?: () => void
   onClose: () => void
   variant?: 'sheet' | 'modal'
+  autoHideRemainingMs?: number | null
+  autoHideDurationMs?: number
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
 
@@ -118,6 +123,10 @@ export default function ResultPanel({
             </div>
 
             <div className="flex items-center gap-2">
+              {autoHideRemainingMs !== null && autoHideRemainingMs !== undefined ? (
+                <AutoHideCountdown remainingMs={autoHideRemainingMs} durationMs={autoHideDurationMs ?? 10_000} />
+              ) : null}
+
               {onRollAgain ? (
                 <button
                   type="button"

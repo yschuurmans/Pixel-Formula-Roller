@@ -23,7 +23,6 @@ import {
   createFormulaId,
   createRollSessionId,
   createRollHistoryEntry,
-  AutoHideCountdown,
 } from './formulaHelpers'
 import {
   getGlowPixelIdsForSlots,
@@ -1559,7 +1558,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     return <Navigate to="/" replace />
   }
 
-  const rollEngineSection = showRollEngine ? (
+  const rollEngineSection = showRollEngine && !isResultPanelOpen ? (
     <section ref={rollEngineRef} className="border-2 border-[#4f94ff] bg-[#10192f] p-4 shadow-[6px_6px_0_0_#07101f]">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
@@ -1690,6 +1689,8 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
         void handleRoll()
       }}
       onClose={() => setIsResultPanelOpen(false)}
+      autoHideRemainingMs={autoHideRemainingMs}
+      autoHideDurationMs={10_000}
     />
   ) : null
 
@@ -1713,12 +1714,6 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
                 Close
               </button>
             </div>
-
-            {autoHideRemainingMs !== null ? (
-              <div className="absolute right-4 top-4">
-                <AutoHideCountdown remainingMs={autoHideRemainingMs} durationMs={10_000} />
-              </div>
-            ) : null}
 
             {rollEngineSection}
             {resultPanel}
