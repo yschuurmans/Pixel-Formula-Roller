@@ -552,10 +552,10 @@ public class PixelsBlePlugin extends Plugin {
 
         @SuppressLint("MissingPermission")
         void connect(int timeoutMs) {
-            Log.i(TAG, "Connecting to device address=" + device.getAddress() + " name='" + safeDeviceName(device) + "' timeoutMs=" + timeoutMs);
+            // Log.i(TAG, "Connecting to device address=" + device.getAddress() + " name='" + safeDeviceName(device) + "' timeoutMs=" + timeoutMs);
             timeoutRunnable = () -> {
                 if (!connectResultDelivered) {
-                    Log.w(TAG, "Connection timed out address=" + device.getAddress());
+                    // Log.w(TAG, "Connection timed out address=" + device.getAddress());
                     connectResultDelivered = true;
                     close();
                     connectCall.reject("Connection timeout");
@@ -586,12 +586,12 @@ public class PixelsBlePlugin extends Plugin {
                     : BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
             );
             writeCharacteristic.setValue(value);
-            Log.i(
-                TAG,
-                "Writing BLE value address=" + device.getAddress()
-                    + " withoutResponse=" + withoutResponse
-                    + " bytes=" + summarizeBytes(value)
-            );
+            // Log.i(
+            //     TAG,
+            //     "Writing BLE value address=" + device.getAddress()
+            //         + " withoutResponse=" + withoutResponse
+            //         + " bytes=" + summarizeBytes(value)
+            // );
             boolean started = gatt.writeCharacteristic(writeCharacteristic);
             if (!started) {
                 throw new IllegalStateException("Bluetooth write failed to start.");
@@ -619,12 +619,12 @@ public class PixelsBlePlugin extends Plugin {
         private final BluetoothGattCallback callback = new BluetoothGattCallback() {
             private void handleCharacteristicChanged(byte[] value) {
                 if (value != null && value.length > 0) {
-                    Log.i(
-                        TAG,
-                        "Notification received address=" + device.getAddress()
-                            + " length=" + value.length
-                            + " bytes=" + summarizeBytes(value)
-                    );
+                    // Log.i(
+                    //     TAG,
+                    //     "Notification received address=" + device.getAddress()
+                    //         + " length=" + value.length
+                    //         + " bytes=" + summarizeBytes(value)
+                    // );
                     emitNotification(device.getAddress(), value);
                 }
             }

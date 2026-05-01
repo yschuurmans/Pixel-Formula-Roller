@@ -913,11 +913,6 @@ export class PixelsService {
         const bytes = event.value
         if (!bytes || bytes.length < 2) return
 
-        // Debug: emit raw notification bytes to help diagnose firmware variants
-        try {
-          nativeLog('d', '[PixelsService] native-notif-raw', pixelId, { bytes: Array.from(bytes) })
-        } catch {}
-
         // Heuristic: detect intermediate "rolling" frames (observed as 0x03 0x03 bursts)
         let rollingFrame = false
         let matchedPattern: string | null = null

@@ -51,12 +51,7 @@ const DIE_ORDER: DieType[] = ['d4', 'd6', 'd8', 'd10', 'd12', 'd20', 'd100']
 const DISPLAY_DIE_ORDER: DieType[] = [...DIE_ORDER].reverse() as DieType[]
 const FORMULA_ROLL_TRANSITION_DELAY_MS = 1200
 const ROLL_GLOW_REPEAT_MS = 2_000
-const ROLL_GLOW_RESUME_DELAY_MS = 5_000
-// While a roll is pending, suppress scheduled prompts for this amount
-// (keeps setTimeout values within 32-bit signed range while effectively
-// preventing prompts until we explicitly resume). 24 hours is more than
-// sufficient for this purpose.
-const ROLL_GLOW_SUPPRESS_WHILE_PENDING_MS = 24 * 60 * 60 * 1000
+const ROLL_GLOW_RESUME_DELAY_MS = 2_000
 const REMEMBERED_DICE_RETRY_INTERVAL_MS = 2_000
 const MAX_CONNECTED = 12
 
@@ -437,9 +432,10 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     } catch {}
     // After a roll completes, defer resuming prompt glows for a short window
     // so the user has time to observe results before prompts resume.
-    const resumeUntil = Date.now() + ROLL_GLOW_RESUME_DELAY_MS
-    setGlowPauseUntil(resumeUntil)
-    glowPauseUntilRef.current = resumeUntil
+    const suppressUntil = Date.now() + ROLL_GLOW_RESUME_DELAY_MS
+    nativeLog('i', 'suppressing prompt glows until', { suppressUntil, resumeDelay: ROLL_GLOW_RESUME_DELAY_MS })
+    setGlowPauseUntil(suppressUntil)
+    glowPauseUntilRef.current = suppressUntil
     // Clear any pending per-roll pixel tracking now that the session completed.
     pendingRollPixelsRef.current.clear()
 
@@ -1087,34 +1083,14 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       const storePixels = useAppStore.getState().pixels
       const anyPendingRolling = pendingIds.some((id) => storePixels[id]?.isRolling === true)
 
-      if (!anyPendingRolling) {
-        const resumeUntil = Date.now() + ROLL_GLOW_RESUME_DELAY_MS
-        setGlowPauseUntil(resumeUntil)
-        glowPauseUntilRef.current = resumeUntil
-      } else {
-        const suppressUntil = Date.now() + ROLL_GLOW_SUPPRESS_WHILE_PENDING_MS
+      if(anyPendingRolling) {
+        const suppressUntil = Date.now() + ROLL_GLOW_RESUME_DELAY_MS
+        nativeLog('i', 'suppressing prompt glows due to pending rolling pixels', { suppressUntil, pendingIds })
         setGlowPauseUntil(suppressUntil)
         glowPauseUntilRef.current = suppressUntil
       }
     })
   }, [clearPendingGlowPrompt, isAwaitingRolls])
-
-  useEffect(() => {
-    if (pendingRollPixelsRef.current.size === 0) return
-
-    const pendingIds = Array.from(pendingRollPixelsRef.current)
-    const anyRolling = pendingIds.some((id) => pixels[id]?.isRolling === true)
-
-    if (anyRolling) {
-      const suppressUntil = Date.now() + ROLL_GLOW_SUPPRESS_WHILE_PENDING_MS
-      setGlowPauseUntil(suppressUntil)
-      glowPauseUntilRef.current = suppressUntil
-    } else {
-      const resumeUntil = Date.now() + ROLL_GLOW_RESUME_DELAY_MS
-      setGlowPauseUntil(resumeUntil)
-      glowPauseUntilRef.current = resumeUntil
-    }
-  }, [pixels])
 
   useEffect(() => {
     if (!isAwaitingRolls || !rollSession || rollSession.result !== null) {
@@ -1429,23 +1405,21 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
         return
       }
 
+      // Are any dice rolling? If so, don't prompt glows yet, and set glowPauseUntil to now + delay to suppress glows until after rolling settles.
+      const anyRolling = pendingGlowPixelIds.some((id) => storeState.pixels[id]?.isRolling === true)
+      if (anyRolling) {
+        const suppressUntil = Date.now() + ROLL_GLOW_RESUME_DELAY_MS
+        nativeLog('i', 'suppressing prompt glows due to rolling pixels (interval check)', { suppressUntil, pendingGlowPixelIds })
+        setGlowPauseUntil(suppressUntil)
+        glowPauseUntilRef.current = suppressUntil
+        return
+      }
+
       void handlePromptPendingDice()
     }, ROLL_GLOW_REPEAT_MS)
 
-    // If a pause is active, schedule an immediate resume when it expires so
-    // we don't wait for the next interval tick.
-    let resumeTimeout: number | null = null
-    if (glowPauseUntil !== null && glowPauseUntil > Date.now()) {
-      resumeTimeout = window.setTimeout(() => {
-        setGlowPauseUntil(null)
-        glowPauseUntilRef.current = null
-        void handlePromptPendingDice()
-      }, glowPauseUntil - Date.now())
-    }
-
     return () => {
       window.clearInterval(intervalId)
-      if (resumeTimeout !== null) window.clearTimeout(resumeTimeout)
     }
   }, [isAwaitingRolls, rollSession, glowPauseUntil, handlePromptPendingDice])
 

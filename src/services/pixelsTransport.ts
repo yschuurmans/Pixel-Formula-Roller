@@ -225,9 +225,7 @@ class NativePixelsSession extends PixelSession {
   async connect(timeoutMs = 0): Promise<void> {
     this._notifyConnectionEvent('connecting')
 
-    const attemptId = Date.now()
     const timeoutToUse = timeoutMs > 0 ? timeoutMs : 6000
-    nativeLog('d', 'NativePixelsSession.connect start', { systemId: this.systemId, timeoutMs: timeoutToUse, attemptId })
 
     try {
       const device = await NativePixelsBle.connect({
@@ -242,8 +240,8 @@ class NativePixelsSession extends PixelSession {
       this._notifyConnectionEvent('connected')
       this._notifyConnectionEvent('ready')
     } catch (error) {
-      const serialized = serializeNativeError(error)
-      nativeLog('w', 'Native connect failed structured', { systemId: this.systemId, timeoutMs: timeoutToUse, attemptId, error: serialized })
+      // const serialized = serializeNativeError(error)
+      // nativeLog('w', 'Native connect failed structured', { systemId: this.systemId, timeoutMs: timeoutToUse, attemptId, error: serialized })
       this._notifyConnectionEvent('disconnected')
       throw normalizeNativeError(error)
     }

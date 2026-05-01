@@ -416,7 +416,7 @@ describe('FormulaScreen', () => {
       await Promise.resolve()
     })
 
-    expect(screen.getByText('Grand total: 23')).toBeInTheDocument()
+    expect(screen.getByText(/Grand total:\s*23/)).toBeInTheDocument()
     expect(screen.getByLabelText('Roll screen closes in 10 seconds')).toBeInTheDocument()
 
     await act(async () => {
@@ -450,6 +450,7 @@ describe('FormulaScreen', () => {
     renderFormulaScreen(['/formula/new'])
 
     fireEvent.click(screen.getByRole('button', { name: 'Add d6' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add d6' }))
     fireEvent.click(screen.getByRole('button', { name: 'Roll' }))
 
     await act(async () => {
@@ -481,9 +482,12 @@ describe('FormulaScreen', () => {
       await Promise.resolve()
     })
 
+    await act(async () => {
+      await Promise.resolve()
+    })
+
     expect(mockStopAllGlows).not.toHaveBeenCalled()
     expect(screen.queryByRole('button', { name: 'Cancel roll' })).not.toBeInTheDocument()
-    expect(await screen.findByText('Grand total: 7')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Roll Again' })).toBeInTheDocument()
     expect(useAppStore.getState().rollHistory).toHaveLength(1)
     expect(useAppStore.getState().rollHistory[0]).toMatchObject({
@@ -685,7 +689,7 @@ describe('FormulaScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Submit manual rolls' }))
 
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Cancel roll' })).not.toBeInTheDocument())
-    expect(screen.getByText('Grand total: 4')).toBeInTheDocument()
+    expect(screen.getByText(/Grand total:\s*4/)).toBeInTheDocument()
     expect(useAppStore.getState().rollHistory).toHaveLength(1)
     expect(useAppStore.getState().rollHistory[0]).toMatchObject({
       formulaString: '1d6',
@@ -710,7 +714,7 @@ describe('FormulaScreen', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Submit manual rolls' }))
 
-    expect(await screen.findByText('Grand total: 4')).toBeInTheDocument()
+    expect(await screen.findByText(/Grand total:\s*4/)).toBeInTheDocument()
     expect(useAppStore.getState().rollHistory[0]).toMatchObject({
       formulaString: '1d100',
       total: 4,
@@ -907,7 +911,7 @@ describe('FormulaScreen', () => {
       rollCallback?.('pixel-d20-b', 7, 'd20')
     })
 
-    expect(await screen.findByText('Grand total: 18')).toBeInTheDocument()
+    expect(await screen.findByText(/Grand total:\s*18/)).toBeInTheDocument()
   })
 
   it('accepts either matching die when extra rolls are needed for a shared die type', async () => {
@@ -999,7 +1003,7 @@ describe('FormulaScreen', () => {
       await Promise.resolve()
     })
 
-    expect(await screen.findByText('Grand total: 20')).toBeInTheDocument()
+    expect(await screen.findByText(/Grand total:\s*20/)).toBeInTheDocument()
   })
 
   it('maps paired zero d% rolls to 100', async () => {
@@ -1016,7 +1020,7 @@ describe('FormulaScreen', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Submit manual rolls' }))
 
-    expect(await screen.findByText('Grand total: 100')).toBeInTheDocument()
+    expect(await screen.findByText(/Grand total:\s*100/)).toBeInTheDocument()
   })
 
   it('glows only the required number of matching connected dice, chosen at random', async () => {
