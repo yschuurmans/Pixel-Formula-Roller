@@ -83,8 +83,8 @@ Files to change (implementation)
 - `src/pages/MainScreen.tsx` — integrate sortable list for the saved formulas list.
 - `src/pages/FormulaScreen.tsx` — integrate sortable list if formulas are listed here as well.
 - `src/stores/useAppStore.ts` — add `moveFormula` / `setFormulaOrder` actions and persist order.
-- `src/components/__tests__/FormulaList.test.tsx` — integration test for drag behavior.
-- `src/stores/__tests__/useAppStore.test.ts` — unit tests for move action.
+- `tests/components/FormulaList.test.tsx` — integration test for drag behavior.
+- `tests/stores/useAppStore.test.ts` — unit tests for move action.
 
 ---
 

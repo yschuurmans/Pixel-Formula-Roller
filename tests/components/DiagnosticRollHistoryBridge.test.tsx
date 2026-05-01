@@ -1,7 +1,7 @@
 import { act, render } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import DiagnosticRollHistoryBridge from '../DiagnosticRollHistoryBridge'
-import { useAppStore } from '../../stores/useAppStore'
+import DiagnosticRollHistoryBridge from '../../src/components/DiagnosticRollHistoryBridge'
+import { useAppStore } from '../../src/stores/useAppStore'
 
 const { unsubscribeMock } = vi.hoisted(() => ({
   unsubscribeMock: vi.fn(),
@@ -15,7 +15,7 @@ let rollCallback:
     ) => void)
   | undefined
 
-vi.mock('../../services/pixelsService', () => ({
+vi.mock('../../src/services/pixelsService', () => ({
   onRollResult: vi.fn((callback: typeof rollCallback) => {
     rollCallback = callback
     return unsubscribeMock

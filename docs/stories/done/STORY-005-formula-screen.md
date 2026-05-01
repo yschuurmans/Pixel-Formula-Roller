@@ -69,6 +69,6 @@ The formula builder screen where users pick dice visually or type a formula, wit
 - Depends on STORY-001, STORY-002.
 
 ## Focused validations
-- `npm test -- src/pages/__tests__/FormulaScreen.test.tsx src/pages/__tests__/MainScreen.test.tsx`
+- `npm test -- tests/pages/FormulaScreen.test.tsx tests/pages/MainScreen.test.tsx`
 - `npm run build`
 - Android deploy verified on a connected phone via Capacitor after Formula screen UI updates

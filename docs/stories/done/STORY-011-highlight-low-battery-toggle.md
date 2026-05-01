@@ -22,4 +22,4 @@ Files of interest
 - `src/services/pixelsService.ts`
 - `src/pages/SettingsScreen.tsx`
 - `src/stores/useAppStore.ts`
-- `src/services/__tests__/pixelsService.test.ts`
+- `tests/services/pixelsService.test.ts`

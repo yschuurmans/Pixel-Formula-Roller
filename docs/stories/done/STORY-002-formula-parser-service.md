@@ -84,6 +84,6 @@ This mapping is enforced here and in STORY-003. No other code should reference `
 - Depends on STORY-000 (done), STORY-001.
 
 ## Tester Findings
-- Verified against [src/services/formulaParser.ts](d:/Git/Pixel-Formula-Roller/src/services/formulaParser.ts) and [src/services/__tests__/formulaParser.test.ts](d:/Git/Pixel-Formula-Roller/src/services/__tests__/formulaParser.test.ts).
+- Verified against [src/services/formulaParser.ts](d:/Git/Pixel-Formula-Roller/src/services/formulaParser.ts) and [tests/services/formulaParser.test.ts](d:/Git/Pixel-Formula-Roller/tests/services/formulaParser.test.ts).
 - Added a regression test to reject subtraction of a dice group (`1d6-1d4`), because STORY-002 supports flat numeric modifiers but not signed dice groups. The parser now returns `null` instead of evaluating that formula incorrectly.
 - Validation on 2026-04-27: `npm test` passed with 36/36 tests; `npm run build` passed.

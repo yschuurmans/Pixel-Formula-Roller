@@ -1,9 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createMemoryRouter, Outlet, RouterProvider, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import FormulaScreen from '../FormulaScreen'
-import MainScreen from '../MainScreen'
-import { useAppStore } from '../../stores/useAppStore'
+import FormulaScreen from '../../src/pages/FormulaScreen'
+import MainScreen from '../../src/pages/MainScreen'
+import { useAppStore } from '../../src/stores/useAppStore'
 
 const {
   mockConnectRememberedDice,
@@ -30,7 +30,7 @@ let rollCallback:
   | undefined
 const scrollIntoViewMock = vi.fn()
 
-vi.mock('../../services/pixelsService', () => ({
+vi.mock('../../src/services/pixelsService', () => ({
   connectRememberedDice: mockConnectRememberedDice,
   connectRememberedDie: (mockConnectRememberedDie as unknown) as typeof mockConnectRememberedDice,
   disconnectDice: mockDisconnectDice,

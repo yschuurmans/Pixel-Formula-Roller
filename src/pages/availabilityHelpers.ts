@@ -139,10 +139,7 @@ export function promoteRecoverableManualSlots(
   slots: RollSlot[],
   rememberedPixels: Record<string, RememberedPixelEntry>,
 ): RollSlot[] {
-  const effectiveRememberedPixels = Object.keys(rememberedPixels || {}).length
-    ? rememberedPixels
-    : useAppStore.getState().pairedPixels
-
+  const effectiveRememberedPixels = getEffectiveRememberedPixels(rememberedPixels)
   const rememberedByDieType = getRememberedPixelsByDieType(effectiveRememberedPixels)
 
   return slots.map((slot) => {
@@ -175,39 +172,43 @@ export function getPendingBleCounts(slots: RollSlot[]): Map<DieType, number> {
   return counts
 }
 
-export function buildAvailabilityPlan(
-  slots: RollSlot[],
-  connectedPixels: ConnectedPixel[],
+function getEffectiveRememberedPixels(
   rememberedPixels: Record<string, RememberedPixelEntry>,
-): AvailabilityPlan {
-  const pendingCounts = getPendingBleCounts(slots)
-  // Debug: emit pending counts and remembered keys to diagnose availability planning
-  // eslint-disable-next-line no-console
-  console.log('buildAvailabilityPlan', { pendingCounts: Array.from(pendingCounts.entries()), connectedPixels, rememberedPixelsKeys: Object.keys(rememberedPixels) })
-  if (pendingCounts.size === 0) {
-    return { disconnectIds: [], connectIds: [] }
-  }
+): Record<string, RememberedPixelEntry> {
+  return Object.keys(rememberedPixels || {}).length
+    ? rememberedPixels
+    : useAppStore.getState().pairedPixels
+}
 
+function getConnectedCounts(connectedPixels: ConnectedPixel[]): Map<DieType, number> {
   const connectedCounts = new Map<DieType, number>()
-  const connectedPixelIds = new Set(connectedPixels.map((pixel) => pixel.pixelId))
+
   for (const pixel of connectedPixels) {
     connectedCounts.set(pixel.dieType, (connectedCounts.get(pixel.dieType) ?? 0) + 1)
   }
 
-  const effectiveRememberedPixels = Object.keys(rememberedPixels || {}).length
-    ? rememberedPixels
-    : useAppStore.getState().pairedPixels
+  return connectedCounts
+}
 
-  const rememberedByDieType = getRememberedPixelsByDieType(effectiveRememberedPixels)
+function getConnectCandidateIds(
+  pendingCounts: Map<DieType, number>,
+  connectedCounts: Map<DieType, number>,
+  connectedPixelIds: Set<string>,
+  rememberedByDieType: Map<DieType, RememberedPixelEntry[]>,
+): string[] {
   const connectCandidates: string[] = []
 
   for (const dieType of DIE_ORDER) {
     const pendingCount = pendingCounts.get(dieType) ?? 0
-    if (pendingCount === 0) continue
+    if (pendingCount === 0) {
+      continue
+    }
 
     const currentlyConnected = connectedCounts.get(dieType) ?? 0
     const missingCount = Math.max(0, pendingCount - currentlyConnected)
-    if (missingCount === 0) continue
+    if (missingCount === 0) {
+      continue
+    }
 
     const availableRemembered = (rememberedByDieType.get(dieType) ?? []).filter(
       (pixel) => !connectedPixelIds.has(pixel.pixelId),
@@ -218,25 +219,72 @@ export function buildAvailabilityPlan(
     }
   }
 
-  if (connectCandidates.length === 0) {
-    return { disconnectIds: [], connectIds: [] }
-  }
+  return connectCandidates
+}
 
+function getAllowedDisconnectCounts(
+  pendingCounts: Map<DieType, number>,
+  connectedCounts: Map<DieType, number>,
+): Map<DieType, number> {
   const allowedDisconnect = new Map<DieType, number>()
+
   for (const [dieType, connectedCount] of connectedCounts) {
     const pending = pendingCounts.get(dieType) ?? 0
     allowedDisconnect.set(dieType, Math.max(0, connectedCount - pending))
   }
 
+  return allowedDisconnect
+}
+
+function getConnectedPixelsSortedForDisconnect(
+  slots: RollSlot[],
+  connectedPixels: ConnectedPixel[],
+  rememberedPixels: Record<string, RememberedPixelEntry>,
+): ConnectedPixel[] {
   const assignedPixelIds = new Set<string>(
-    slots.map((s) => s.pixelId).filter((id): id is string => id !== null),
+    slots.map((slot) => slot.pixelId).filter((pixelId): pixelId is string => pixelId !== null),
   )
 
-  const connectedByAge = [...connectedPixels]
-    .filter((p) => !assignedPixelIds.has(p.pixelId))
+  return [...connectedPixels]
+    .filter((pixel) => !assignedPixelIds.has(pixel.pixelId))
     .sort(
-      (left, right) => (rememberedPixels[left.pixelId]?.lastUsedAt ?? 0) - (rememberedPixels[right.pixelId]?.lastUsedAt ?? 0),
+      (left, right) =>
+        (rememberedPixels[left.pixelId]?.lastUsedAt ?? 0) -
+        (rememberedPixels[right.pixelId]?.lastUsedAt ?? 0),
     )
+}
+
+export function buildAvailabilityPlan(
+  slots: RollSlot[],
+  connectedPixels: ConnectedPixel[],
+  rememberedPixels: Record<string, RememberedPixelEntry>,
+): AvailabilityPlan {
+  const pendingCounts = getPendingBleCounts(slots)
+  if (pendingCounts.size === 0) {
+    return { disconnectIds: [], connectIds: [] }
+  }
+
+  const effectiveRememberedPixels = getEffectiveRememberedPixels(rememberedPixels)
+  const connectedCounts = getConnectedCounts(connectedPixels)
+  const connectedPixelIds = new Set(connectedPixels.map((pixel) => pixel.pixelId))
+  const rememberedByDieType = getRememberedPixelsByDieType(effectiveRememberedPixels)
+  const connectCandidates = getConnectCandidateIds(
+    pendingCounts,
+    connectedCounts,
+    connectedPixelIds,
+    rememberedByDieType,
+  )
+
+  if (connectCandidates.length === 0) {
+    return { disconnectIds: [], connectIds: [] }
+  }
+
+  const allowedDisconnect = getAllowedDisconnectCounts(pendingCounts, connectedCounts)
+  const connectedByAge = getConnectedPixelsSortedForDisconnect(
+    slots,
+    connectedPixels,
+    rememberedPixels,
+  )
 
   const disconnectIds: string[] = []
 
