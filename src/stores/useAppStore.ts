@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import type { DieType } from '../types/formula';
 import type { Profile, ProfileSkill, RollHistoryEntry, SavedFormula } from '../types/profile';
+import { DEFAULT_CHARACTER_SKILL_COLUMN, getSkillColumn, normalizeLegacySkillColumns, type SkillColumn } from '../utils/profileSkills';
 
 export type { Profile, ProfileSkill, RollHistoryEntry, SavedFormula } from '../types/profile';
 
@@ -68,7 +69,7 @@ interface AppActions {
   updateProfileSkillLabel: (profileId: string, skillId: string, label: string) => boolean;
   updateProfileSkillModifier: (profileId: string, skillId: string, modifier: number) => boolean;
   removeProfileSkill: (profileId: string, skillId: string) => boolean;
-  reorderProfileSkills: (profileId: string, activeSkillId: string, overSkillId: string) => boolean;
+  reorderProfileSkills: (profileId: string, activeSkillId: string, targetColumn: SkillColumn, overSkillId?: string | null) => boolean;
   deleteProfile: (profileId: string) => boolean;
   selectProfile: (profileId: string) => boolean;
   rememberPairedPixelId: (pixelId: string) => void;
@@ -115,6 +116,8 @@ const DEFAULT_CHARACTER_SKILLS: Array<Pick<ProfileSkill, 'label' | 'modifier'>> 
   { label: 'Survival', modifier: 0 },
 ];
 
+const CHARACTER_LEFT_SKILL_COUNT = 6;
+
 function createProfileId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
@@ -132,17 +135,31 @@ function createSkillId(): string {
 }
 
 function createDefaultCharacterSkills(): ProfileSkill[] {
-  return DEFAULT_CHARACTER_SKILLS.map((skill) => ({
+  return DEFAULT_CHARACTER_SKILLS.map((skill, index) => ({
     id: createSkillId(),
     label: skill.label,
     modifier: skill.modifier,
+    column: index < CHARACTER_LEFT_SKILL_COUNT ? 'left' : 'right',
   }));
+}
+
+function createSkillRecord(skill: Partial<ProfileSkill> = {}, defaultColumn: SkillColumn = DEFAULT_CHARACTER_SKILL_COLUMN): ProfileSkill {
+  return {
+    id: skill.id ?? createSkillId(),
+    label: skill.label?.trim() || 'New Skill',
+    modifier: Number.isFinite(skill.modifier) ? Math.trunc(skill.modifier as number) : 0,
+    column: skill.column ?? defaultColumn,
+  };
+}
+
+function normalizeProfileSkills(skills: ProfileSkill[], defaultColumn: SkillColumn): ProfileSkill[] {
+  return normalizeLegacySkillColumns(skills, defaultColumn);
 }
 
 function createProfileRecord(name: string, overrides: Partial<Profile> = {}): Profile {
   const now = overrides.updatedAt ?? overrides.createdAt ?? Date.now();
   const isCharacter = overrides.isCharacter ?? false;
-  const skills = overrides.skills ? overrides.skills.map((skill) => ({ ...skill })) : [];
+  const skills = normalizeProfileSkills(overrides.skills ? overrides.skills.map((skill) => ({ ...skill })) : [], 'left');
 
   return {
     id: overrides.id ?? createProfileId(),
@@ -174,7 +191,7 @@ function normalizeProfile(
   } = {},
 ): Profile {
   const isCharacter = profile.isCharacter ?? false;
-  const skills = profile.skills ? profile.skills.map((skill) => ({ ...skill })) : [];
+  const skills = normalizeProfileSkills(profile.skills ? profile.skills.map((skill) => ({ ...skill })) : [], 'left');
 
   return createProfileRecord(profile.name ?? PROFILE_DEFAULT_NAME, {
     id: profile.id ?? profileId,
@@ -445,7 +462,12 @@ export const useAppStore = create<AppState & AppActions>()(
           const nextProfile = {
             ...profile,
             isCharacter,
-            skills: isCharacter && profile.skills.length === 0 ? createDefaultCharacterSkills() : profile.skills,
+            skills:
+              isCharacter && profile.skills.length === 0
+                ? createDefaultCharacterSkills()
+                : isCharacter
+                  ? normalizeProfileSkills(profile.skills, 'left')
+                  : profile.skills,
             updatedAt: Date.now(),
           };
 
@@ -470,11 +492,7 @@ export const useAppStore = create<AppState & AppActions>()(
             return state;
           }
 
-          const nextSkill = {
-            id: skill.id ?? createSkillId(),
-            label: skill.label?.trim() || 'New Skill',
-            modifier: Number.isFinite(skill.modifier) ? Math.trunc(skill.modifier as number) : 0,
-          } satisfies ProfileSkill;
+          const nextSkill = createSkillRecord(skill, 'right');
 
           createdSkillId = nextSkill.id;
           const nextProfile = {
@@ -506,9 +524,6 @@ export const useAppStore = create<AppState & AppActions>()(
           }
 
           const trimmedLabel = label.trim();
-          if (trimmedLabel === '') {
-            return state;
-          }
 
           const nextSkills = profile.skills.map((skill) => (skill.id === skillId ? { ...skill, label: trimmedLabel } : skill));
           const changed = nextSkills.some((skill, index) => skill !== profile.skills[index]);
@@ -606,24 +621,65 @@ export const useAppStore = create<AppState & AppActions>()(
 
         return removed;
       },
-      reorderProfileSkills: (profileId, activeSkillId, overSkillId) => {
+      reorderProfileSkills: (profileId, activeSkillId, targetColumn, overSkillId) => {
         let reordered = false;
 
         set((state) => {
           const profile = state.profiles[profileId];
-          if (!profile || activeSkillId === overSkillId) {
+          if (!profile) {
             return state;
           }
 
-          const fromIndex = profile.skills.findIndex((skill) => skill.id === activeSkillId);
-          const toIndex = profile.skills.findIndex((skill) => skill.id === overSkillId);
-          if (fromIndex < 0 || toIndex < 0) {
+          const sourceSkill = profile.skills.find((skill) => skill.id === activeSkillId);
+          if (!sourceSkill) {
             return state;
           }
 
-          const nextSkills = [...profile.skills];
-          const [movedSkill] = nextSkills.splice(fromIndex, 1);
-          nextSkills.splice(toIndex, 0, movedSkill);
+          const sourceColumn = getSkillColumn(sourceSkill);
+          let leftSkills = profile.skills.filter((skill) => getSkillColumn(skill) === 'left');
+          let rightSkills = profile.skills.filter((skill) => getSkillColumn(skill) === 'right');
+          const sourceSkills = sourceColumn === 'left' ? [...leftSkills] : [...rightSkills];
+
+          const sourceIndex = sourceSkills.findIndex((skill) => skill.id === activeSkillId);
+          if (sourceIndex < 0) {
+            return state;
+          }
+
+          const [movedSkill] = sourceSkills.splice(sourceIndex, 1);
+          const movedSkillWithColumn = { ...movedSkill, column: targetColumn };
+
+          if (sourceColumn === targetColumn) {
+            const sameColumnSkills = sourceSkills;
+            let insertIndex = overSkillId ? sameColumnSkills.findIndex((skill) => skill.id === overSkillId) : sameColumnSkills.length;
+            if (insertIndex < 0) {
+              insertIndex = sameColumnSkills.length;
+            }
+            if (insertIndex > sourceIndex) {
+              insertIndex -= 1;
+            }
+
+            sameColumnSkills.splice(insertIndex, 0, movedSkillWithColumn);
+            if (sourceColumn === 'left') {
+              leftSkills = sameColumnSkills;
+            } else {
+              rightSkills = sameColumnSkills;
+            }
+          } else {
+            const targetSkills = targetColumn === 'left' ? [...leftSkills] : [...rightSkills];
+            const insertIndex = overSkillId ? targetSkills.findIndex((skill) => skill.id === overSkillId) : -1;
+            const targetInsertIndex = insertIndex >= 0 ? insertIndex : targetSkills.length;
+
+            targetSkills.splice(targetInsertIndex, 0, movedSkillWithColumn);
+            if (sourceColumn === 'left') {
+              leftSkills = sourceSkills;
+              rightSkills = targetSkills;
+            } else {
+              leftSkills = targetSkills;
+              rightSkills = sourceSkills;
+            }
+          }
+
+          const nextSkills = [...leftSkills, ...rightSkills];
 
           reordered = true;
           const nextProfile = {
@@ -770,7 +826,7 @@ export const useAppStore = create<AppState & AppActions>()(
     }),
     {
       name: 'pixel-formula-roller',
-      version: 4,
+      version: 5,
       storage: appStorage,
       migrate: (persistedState, _version) => {
         const typedState = persistedState as (Partial<PersistedAppState> & {

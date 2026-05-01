@@ -191,6 +191,8 @@ describe('useAppStore persistence', () => {
     expect(useAppStore.getState().setProfileCharacterMode(profileId!, true)).toBe(true)
     expect(useAppStore.getState().profiles[profileId!].isCharacter).toBe(true)
     expect(useAppStore.getState().profiles[profileId!].skills).toHaveLength(24)
+    expect(useAppStore.getState().profiles[profileId!].skills.filter((skill) => skill.column === 'left')).toHaveLength(6)
+    expect(useAppStore.getState().profiles[profileId!].skills.filter((skill) => skill.column === 'right')).toHaveLength(18)
 
     const addedSkillId = useAppStore.getState().addProfileSkill(profileId!, { label: 'Cooking', modifier: 2 })
     expect(addedSkillId).not.toBeNull()
@@ -198,6 +200,7 @@ describe('useAppStore persistence', () => {
       id: addedSkillId,
       label: 'Cooking',
       modifier: 2,
+      column: 'right',
     })
 
     const firstSkillId = useAppStore.getState().profiles[profileId!].skills[0].id
@@ -209,10 +212,46 @@ describe('useAppStore persistence', () => {
     })
 
     const secondSkillId = useAppStore.getState().profiles[profileId!].skills[1].id
-    expect(useAppStore.getState().reorderProfileSkills(profileId!, secondSkillId, firstSkillId)).toBe(true)
+    expect(useAppStore.getState().reorderProfileSkills(profileId!, secondSkillId, 'left', firstSkillId)).toBe(true)
     expect(useAppStore.getState().profiles[profileId!].skills[0].id).toBe(secondSkillId)
 
     expect(useAppStore.getState().removeProfileSkill(profileId!, firstSkillId)).toBe(true)
     expect(useAppStore.getState().profiles[profileId!].skills.some((skill) => skill.id === firstSkillId)).toBe(false)
+  })
+
+  it('allows clearing a skill label and stores multi-digit modifiers', () => {
+    const profileId = useAppStore.getState().createProfile('Character Sheet')
+    expect(profileId).not.toBeNull()
+
+    useAppStore.getState().setProfileCharacterMode(profileId!, true)
+
+    const skillId = useAppStore.getState().profiles[profileId!].skills[0].id
+
+    expect(useAppStore.getState().updateProfileSkillLabel(profileId!, skillId, '')).toBe(true)
+    expect(useAppStore.getState().profiles[profileId!].skills[0].label).toBe('')
+
+    expect(useAppStore.getState().updateProfileSkillModifier(profileId!, skillId, 12)).toBe(true)
+    expect(useAppStore.getState().profiles[profileId!].skills[0].modifier).toBe(12)
+  })
+
+  it('moves a skill between columns without rebalancing the other column', () => {
+    const profileId = useAppStore.getState().createProfile('Column Split')
+    expect(profileId).not.toBeNull()
+
+    useAppStore.getState().setProfileCharacterMode(profileId!, true)
+
+    const profile = useAppStore.getState().profiles[profileId!]
+    const leftSkills = profile.skills.filter((skill) => skill.column === 'left')
+    const rightSkills = profile.skills.filter((skill) => skill.column === 'right')
+    const movingSkillId = leftSkills[0].id
+    const targetSkillId = rightSkills[1].id
+
+    expect(useAppStore.getState().reorderProfileSkills(profileId!, movingSkillId, 'right', targetSkillId)).toBe(true)
+
+    const nextProfile = useAppStore.getState().profiles[profileId!]
+    expect(nextProfile.skills.filter((skill) => skill.column === 'left')).toHaveLength(5)
+    expect(nextProfile.skills.filter((skill) => skill.column === 'right')).toHaveLength(19)
+    expect(nextProfile.skills.filter((skill) => skill.column === 'right')[1].id).toBe(movingSkillId)
+    expect(nextProfile.skills.filter((skill) => skill.column === 'left').some((skill) => skill.id === movingSkillId)).toBe(false)
   })
 })

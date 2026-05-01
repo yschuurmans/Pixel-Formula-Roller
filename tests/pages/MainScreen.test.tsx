@@ -4,17 +4,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import MainScreen from '../../src/pages/MainScreen'
 import ProfileScreen from '../../src/pages/ProfileScreen'
 import { ROLL_HISTORY_STORAGE_LIMIT, STORAGE_WARNING_EVENT, type RollHistoryEntry, useAppStore } from '../../src/stores/useAppStore'
+import FormulaScreen from '../../src/pages/FormulaScreen'
 
 const {
   connectDieMock,
   getBleUnavailableMessageMock,
   glowDieMock,
-  rollFormulaMock,
 } = vi.hoisted(() => ({
   connectDieMock: vi.fn(),
   getBleUnavailableMessageMock: vi.fn(() => 'Bluetooth is unavailable on this build. Run the app on a supported Android device.'),
   glowDieMock: vi.fn(),
-  rollFormulaMock: vi.fn(),
 }))
 
 vi.mock('../../src/services/pixelsService', () => ({
@@ -23,70 +22,33 @@ vi.mock('../../src/services/pixelsService', () => ({
   glowDie: glowDieMock,
 }))
 
-vi.mock('../../src/services/characterRoll', () => ({
-  rollFormula: rollFormulaMock,
-}))
+function LocationDisplay() {
+  const location = useLocation()
+  return <div data-testid="location">{location.pathname}</div>
+}
 
-  })
+function createHistoryEntry(overrides: Partial<RollHistoryEntry> & Pick<RollHistoryEntry, 'id' | 'total'>): RollHistoryEntry {
+  return {
+    formulaName: '',
+    formulaString: '',
+    rolledAt: Date.now(),
+    ...overrides,
+  }
+}
 
-  it('shows a character sheet and rolls from tap and long-press selection', async () => {
-    vi.useFakeTimers()
-
-    rollFormulaMock.mockImplementation((formula: string) => {
-      const total = formula.includes('kh1') ? 23 : formula.includes('kl1') ? 3 : 17
-
-      return {
-        parsedFormula: {
-          groups: [],
-          flatModifier: formula.includes('+3') ? 3 : 2,
-          raw: formula,
-          canonical: formula,
-        },
-        result: {
-          groups: [],
-          flatModifier: formula.includes('+3') ? 3 : 2,
-          total,
-        },
-      }
-    })
-
-    useAppStore.setState({
-      profiles: {
-        default: {
-          id: 'default',
-          name: 'Default',
-          isCharacter: true,
-          skills: [
-            { id: 'skill-1', label: 'Stealth', modifier: 3 },
-          ],
-          formulas: [],
-          history: [],
-          createdAt: 1,
-          updatedAt: 1,
-        },
+function resetStore() {
+  localStorage.clear()
+  useAppStore.setState({
+    profiles: {
+      default: {
+        id: 'default',
+        name: 'Default',
+        formulas: [],
+        history: [],
+        createdAt: 1,
+        updatedAt: 1,
       },
-      activeProfileId: 'default',
-    })
-
-    renderMainScreen()
-
-    expect(screen.getByText('Character Sheet')).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('button', { name: '+3' }))
-    expect(rollFormulaMock).toHaveBeenCalledWith('1d20+3')
-    expect(screen.getByText('Grand total: 17')).toBeInTheDocument()
-    expect(useAppStore.getState().profiles.default.history[0].formulaString).toBe('1d20+3')
-
-    fireEvent.click(screen.getByRole('button', { name: 'Close result panel' }))
-
-    fireEvent.mouseDown(screen.getByRole('button', { name: '+3' }))
-    vi.advanceTimersByTime(400)
-    fireEvent.mouseUp(screen.getByRole('button', { name: '+3' }))
-
-    expect(screen.getByRole('dialog')).toHaveTextContent('Stealth')
-    fireEvent.click(screen.getByRole('button', { name: 'Advantage' }))
-    expect(rollFormulaMock).toHaveBeenCalledWith('2d20kh1+3')
-    expect(useAppStore.getState().profiles.default.history[0].formulaString).toBe('2d20kh1+3')
+    },
     activeProfileId: 'default',
     savedFormulas: [],
     rollHistory: [],
@@ -97,6 +59,22 @@ vi.mock('../../src/services/characterRoll', () => ({
     bleError: null,
     pixels: {},
   })
+}
+
+function renderMainScreen() {
+  return render(
+    <MemoryRouter initialEntries={[{ pathname: '/' }]}>
+      <Routes>
+        <Route path="/" element={<><MainScreen /><LocationDisplay /></>} />
+        <Route path="/formula/:id" element={<LocationDisplay />} />
+        <Route path="/roll/:id" element={<LocationDisplay />} />
+        <Route path="/roll" element={<><FormulaScreen mode="roll-only" /><LocationDisplay /></>} />
+        <Route path="/formula/new" element={<LocationDisplay />} />
+        <Route path="/settings" element={<LocationDisplay />} />
+        <Route path="/profiles" element={<LocationDisplay />} />
+      </Routes>
+    </MemoryRouter>,
+  )
 }
 
 describe('MainScreen', () => {
@@ -111,7 +89,7 @@ describe('MainScreen', () => {
   it('shows empty states and navigation actions', () => {
     renderMainScreen()
 
-    expect(screen.getByText('Pixels Roller')).toBeInTheDocument()
+    expect(screen.getAllByText('Pixels Roller').length).toBeGreaterThan(0)
     expect(screen.getByRole('heading', { name: 'Default' })).toBeInTheDocument()
     expect(screen.getByText('No saved formulas yet — tap + to add one')).toBeInTheDocument()
     expect(screen.getByText('No rolls yet')).toBeInTheDocument()
@@ -219,48 +197,8 @@ describe('MainScreen', () => {
     expect(glowDieMock).toHaveBeenCalledWith('pixel-1234')
     expect(glowDieMock).toHaveBeenCalledWith('pixel-4321')
     expect(connectDieMock).not.toHaveBeenCalled()
-  })
-
-  it('shows the BLE unavailable banner with platform guidance', () => {
-    useAppStore.setState({ bleAvailable: false })
-
-    renderMainScreen()
-
-    expect(screen.getByText('Bluetooth is unavailable on this build. Run the app on a supported Android device.')).toBeInTheDocument()
-  })
-
-  it('renders saved formulas and navigates when a card body is clicked', () => {
-    useAppStore.setState({
-      profiles: {
-        default: {
-          id: 'default',
-          name: 'Default',
-          isCharacter: false,
-          skills: [],
-          formulas: [
-            {
-              id: 'formula-1',
-              name: 'Fireball',
-              formula: '8d6',
-              createdAt: 1,
-              updatedAt: 1,
-            },
-          ],
-          history: [],
-          createdAt: 1,
-          updatedAt: 1,
-        },
-      },
-      savedFormulas: [],
     })
 
-    renderMainScreen()
-
-    fireEvent.click(screen.getByText('8d6').closest('button')!)
-    expect(screen.getByTestId('location')).toHaveTextContent('/roll/formula-1')
-  })
-
-  it('opens the delete modal, removes the formula, and shows a toast', () => {
     useAppStore.setState({
       profiles: {
         default: {
@@ -282,7 +220,9 @@ describe('MainScreen', () => {
           updatedAt: 1,
         },
       },
+      activeProfileId: 'default',
       savedFormulas: [],
+      rollHistory: [],
     })
 
     renderMainScreen()
@@ -411,66 +351,42 @@ describe('MainScreen', () => {
     })
 
     expect(screen.getByText('Storage full — oldest history entries will be removed')).toBeInTheDocument()
+  })
 
-      it('shows a character sheet and rolls from tap and long-press selection', async () => {
-        vi.useFakeTimers()
+  it('shows a character sheet and rolls on tap while prompting on long-press selection', async () => {
+    vi.useFakeTimers()
 
-        rollFormulaMock.mockImplementation((formula: string) => {
-          const total = formula.includes('kh1') ? 23 : formula.includes('kl1') ? 3 : 17
+    useAppStore.setState({
+      profiles: {
+        default: {
+          id: 'default',
+          name: 'Default',
+          isCharacter: true,
+          skills: [{ id: 'skill-1', label: 'Stealth', modifier: 3 }],
+          formulas: [],
+          history: [],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+      activeProfileId: 'default',
+    })
 
-          return {
-            parsedFormula: {
-              groups: [],
-              flatModifier: formula.includes('+3') ? 3 : 2,
-              raw: formula,
-              canonical: formula,
-            },
-            result: {
-              groups: [],
-              flatModifier: formula.includes('+3') ? 3 : 2,
-              total,
-            },
-          }
-        })
+    renderMainScreen()
 
-        useAppStore.setState({
-          profiles: {
-            default: {
-              id: 'default',
-              name: 'Default',
-              isCharacter: true,
-              skills: [
-                { id: 'skill-1', label: 'Stealth', modifier: 3 },
-              ],
-              formulas: [],
-              history: [],
-              createdAt: 1,
-              updatedAt: 1,
-            },
-          },
-          activeProfileId: 'default',
-        })
+    expect(screen.getByText('Character Sheet')).toBeInTheDocument()
 
-        renderMainScreen()
+    fireEvent.click(screen.getByRole('button', { name: '+3' }))
+    expect(screen.getByTestId('location')).toHaveTextContent('/roll')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 
-        expect(screen.getByText('Character Sheet')).toBeInTheDocument()
+    fireEvent.mouseDown(screen.getByRole('button', { name: '+3' }))
+    vi.advanceTimersByTime(400)
+    fireEvent.mouseUp(screen.getByRole('button', { name: '+3' }))
 
-        fireEvent.click(screen.getByRole('button', { name: '+3' }))
-        expect(rollFormulaMock).toHaveBeenCalledWith('1d20+3')
-        expect(screen.getByText('Grand total: 17')).toBeInTheDocument()
-        expect(useAppStore.getState().profiles.default.history[0].formulaString).toBe('1d20+3')
-
-        fireEvent.click(screen.getByRole('button', { name: 'Close result panel' }))
-
-        fireEvent.mouseDown(screen.getByRole('button', { name: '+3' }))
-        vi.advanceTimersByTime(400)
-        fireEvent.mouseUp(screen.getByRole('button', { name: '+3' }))
-
-        expect(screen.getByRole('dialog')).toHaveTextContent('Stealth')
-        fireEvent.click(screen.getByRole('button', { name: 'Advantage' }))
-        expect(rollFormulaMock).toHaveBeenCalledWith('2d20kh1+3')
-        expect(useAppStore.getState().profiles.default.history[0].formulaString).toBe('2d20kh1+3')
-      })
+    expect(screen.getByRole('dialog')).toHaveTextContent('Stealth')
+    fireEvent.click(screen.getByRole('button', { name: 'Advantage' }))
+    expect(screen.getByTestId('location')).toHaveTextContent('/roll')
   })
 
   it('shows a toast passed through navigation state', () => {

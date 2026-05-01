@@ -1,6 +1,6 @@
 # STORY-014 — Characters (Character Sheet)
 
-Status: backlog
+Status: done
 
 Attached to: STORY-013 — Profiles
 

@@ -13,6 +13,8 @@ export type NavigationIntent = {
 
 export type FormulaScreenLocationState = {
   focusRollEngine?: boolean
+  formulaText?: string
+  name?: string
 }
 
 export type SnapshotState = {

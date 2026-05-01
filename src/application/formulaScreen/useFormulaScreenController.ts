@@ -62,9 +62,22 @@ export function useFormulaScreenController(mode: FormulaScreenMode) {
 
   const isRollOnly = mode === 'roll-only'
   const isEditing = !isRollOnly && Boolean(params.id)
+  const requestedRollOnlyFormula = useMemo(
+    () =>
+      isRollOnly && locationState?.formulaText
+        ? {
+            id: '__character-roll__',
+            name: locationState.name ?? 'Character Roll',
+            formula: locationState.formulaText,
+            createdAt: 0,
+            updatedAt: 0,
+          }
+        : null,
+    [isRollOnly, locationState?.formulaText, locationState?.name],
+  )
   const existingFormula = useMemo(
-    () => controller.getExistingFormula(activeProfile?.formulas ?? [], params.id),
-    [activeProfile?.formulas, controller, params.id],
+    () => requestedRollOnlyFormula ?? controller.getExistingFormula(activeProfile?.formulas ?? [], params.id),
+    [activeProfile?.formulas, controller, params.id, requestedRollOnlyFormula],
   )
 
   const [name, setName] = useState('')

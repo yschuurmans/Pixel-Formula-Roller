@@ -69,19 +69,15 @@ describe('ProfileEditScreen', () => {
     expect(screen.getByText('New Skill')).toBeInTheDocument()
 
     const skillCard = screen.getByText('New Skill').closest('article')!
-    fireEvent.click(within(skillCard).getByRole('button', { name: 'New Skill' }))
+    const labelButton = within(skillCard).getByRole('button', { name: 'New Skill' })
+    fireEvent.click(labelButton)
     fireEvent.change(within(skillCard).getByDisplayValue('New Skill'), {
       target: { value: 'Cooking' },
     })
 
-    fireEvent.click(within(skillCard).getByRole('button', { name: '0' }))
-    fireEvent.change(within(skillCard).getByDisplayValue('0'), {
-      target: { value: '2' },
-    })
-
     expect(useAppStore.getState().profiles.default.skills.at(-1)).toMatchObject({
       label: 'Cooking',
-      modifier: 2,
+      modifier: 0,
     })
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))

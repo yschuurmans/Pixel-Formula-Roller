@@ -74,9 +74,9 @@ export default function AdvantagePrompt({
   };
 
   const options: Array<{ mode: RollMode; label: string; formula: string; tone: 'good' | 'neutral' | 'bad' }> = [
-    { mode: 'disadvantage', label: 'Disadvantage', formula: displayFormula('2d20kl1'), tone: 'bad' },
-    { mode: 'normal', label: 'Normal', formula: displayFormula('1d20'), tone: 'neutral' },
     { mode: 'advantage', label: 'Advantage', formula: displayFormula('2d20kh1'), tone: 'good' },
+    { mode: 'normal', label: 'Normal', formula: displayFormula('1d20'), tone: 'neutral' },
+    { mode: 'disadvantage', label: 'Disadvantage', formula: displayFormula('2d20kl1'), tone: 'bad' },
   ];
 
   return (
@@ -123,9 +123,9 @@ export default function AdvantagePrompt({
                       : 'border-[#7dd3fc] bg-[#102a3a] text-[#d9f3ff]'
                 }`}
               >
-                {option.mode === 'disadvantage' ? <D20Icon accent="#7a1d2a" stacked minus /> : null}
-                {option.mode === 'normal' ? <D20Icon accent="#102a3a" /> : null}
                 {option.mode === 'advantage' ? <D20Icon accent="#17301f" stacked plus /> : null}
+                {option.mode === 'normal' ? <D20Icon accent="#102a3a" /> : null}
+                {option.mode === 'disadvantage' ? <D20Icon accent="#7a1d2a" stacked minus /> : null}
                 <span className="text-[11px] uppercase tracking-[0.18em]">{option.label}</span>
                 <span className="font-mono text-[10px] opacity-90">{option.formula}</span>
               </button>

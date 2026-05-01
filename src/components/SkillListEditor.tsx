@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
+import { useEffect, useRef, useState } from 'react';
+import { DndContext, PointerSensor, closestCenter, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, rectSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { ProfileSkill } from '../types/profile';
+import { getSkillColumn, partitionSkillsByColumn, type SkillColumn } from '../utils/profileSkills';
 
 function formatModifier(modifier: number): string {
   return modifier > 0 ? `+${modifier}` : String(modifier);
@@ -19,26 +20,35 @@ function SkillCard({
   onUpdateLabel: (skillId: string, label: string) => void;
   onUpdateModifier: (skillId: string, modifier: number) => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: skill.id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: skill.id,
+    data: { column: getSkillColumn(skill) },
+  });
   const [editingField, setEditingField] = useState<'label' | 'modifier' | null>(null);
+  const [labelDraft, setLabelDraft] = useState(skill.label);
   const [modifierDraft, setModifierDraft] = useState(String(skill.modifier));
   const labelInputRef = useRef<HTMLInputElement | null>(null);
   const modifierInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    if (editingField === 'label') {
-      labelInputRef.current?.focus();
-      labelInputRef.current?.select();
+    if (editingField !== 'label') {
+      setLabelDraft(skill.label);
+      return;
     }
-  }, [editingField]);
+
+    labelInputRef.current?.focus();
+    labelInputRef.current?.select();
+  }, [editingField, skill.label]);
 
   useEffect(() => {
-    if (editingField === 'modifier') {
-      modifierInputRef.current?.focus();
-      modifierInputRef.current?.select();
+    if (editingField !== 'modifier') {
       setModifierDraft(String(skill.modifier));
+      return;
     }
-  }, [editingField, skill.modifier]);
+
+    modifierInputRef.current?.focus();
+    modifierInputRef.current?.select();
+  }, [editingField]);
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -50,15 +60,15 @@ function SkillCard({
     <article
       ref={setNodeRef}
       style={style}
-      className={`grid select-none grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-3 border-2 border-[#5d4a7a] bg-[#1b1522] p-3 shadow-[4px_4px_0_0_#09070d] ${isDragging ? 'opacity-60' : 'cursor-grab active:cursor-grabbing'}`}
-      {...attributes}
-      {...listeners}
+      className={`grid select-none grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-1.5 px-1 py-1 ${isDragging ? 'opacity-60' : ''}`}
     >
       <button
         type="button"
-        aria-hidden="true"
-        tabIndex={-1}
-        className="border border-[#7d6b95] bg-[#251d2e] px-2 py-2 text-[10px] text-[#f7ead4]"
+        aria-label={`Drag ${skill.label}`}
+        className="border border-[#7d6b95] bg-[#251d2e] px-1.5 py-1 text-[7px] leading-none text-[#f7ead4] cursor-grab active:cursor-grabbing"
+        style={{ touchAction: 'none' }}
+        {...attributes}
+        {...listeners}
       >
         ⋮⋮
       </button>
@@ -66,16 +76,19 @@ function SkillCard({
       {editingField === 'label' ? (
         <input
           ref={labelInputRef}
-          value={skill.label}
-          onChange={(event) => onUpdateLabel(skill.id, event.target.value)}
-          onBlur={() => setEditingField(null)}
-          className="min-w-0 select-text border-2 border-[#7d6b95] bg-[#120e17] px-3 py-2 text-[10px] text-[#f7ead4] outline-none"
+          value={labelDraft}
+          onChange={(event) => setLabelDraft(event.target.value)}
+          onBlur={() => {
+            onUpdateLabel(skill.id, labelDraft)
+            setEditingField(null)
+          }}
+          className="min-w-0 select-text border border-[#7d6b95] bg-[#120e17] px-2 py-1 text-[7px] text-[#f7ead4] outline-none"
         />
       ) : (
         <button
           type="button"
           onClick={() => setEditingField('label')}
-          className="min-w-0 text-left text-[10px] text-[#f7ead4]"
+          className="min-w-0 truncate text-left text-[7px] leading-tight text-[#f7ead4]"
         >
           {skill.label || 'Unnamed skill'}
         </button>
@@ -84,7 +97,7 @@ function SkillCard({
       {editingField === 'modifier' ? (
         <input
           ref={modifierInputRef}
-          type="number"
+          type="text"
           inputMode="numeric"
           value={modifierDraft}
           onChange={(event) => {
@@ -96,13 +109,13 @@ function SkillCard({
             }
           }}
           onBlur={() => setEditingField(null)}
-          className="w-20 select-text border-2 border-[#7dd3fc] bg-[#102a3a] px-3 py-2 text-[10px] text-[#d9f3ff] outline-none"
+          className="w-14 select-text border border-[#7dd3fc] bg-[#102a3a] px-2 py-1 text-[7px] text-[#d9f3ff] outline-none"
         />
       ) : (
         <button
           type="button"
           onClick={() => setEditingField('modifier')}
-          className="min-w-14 border-2 border-[#7dd3fc] bg-[#102a3a] px-3 py-2 text-[10px] text-[#d9f3ff]"
+          className="min-w-10 border border-[#7dd3fc] bg-[#102a3a] px-2 py-1 text-[7px] text-[#d9f3ff]"
         >
           {formatModifier(skill.modifier)}
         </button>
@@ -112,11 +125,46 @@ function SkillCard({
         type="button"
         aria-label={`Remove ${skill.label}`}
         onClick={() => onRemove(skill.id)}
-        className="border-2 border-[#ff9aa2] bg-[#35181f] px-3 py-2 text-[10px] text-[#ffe3e6]"
+        className="border border-[#ff9aa2] bg-[#35181f] px-2 py-1 text-[7px] text-[#ffe3e6]"
       >
         ✕
       </button>
     </article>
+  );
+}
+
+function SkillColumn({
+  column,
+  columnSkills,
+  onRemoveSkill,
+  onUpdateLabel,
+  onUpdateModifier,
+}: {
+  column: SkillColumn;
+  columnSkills: ProfileSkill[];
+  onRemoveSkill: (skillId: string) => void;
+  onUpdateLabel: (skillId: string, label: string) => void;
+  onUpdateModifier: (skillId: string, modifier: number) => void;
+}) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: column,
+    data: { column },
+  });
+
+  return (
+    <div ref={setNodeRef} className={`min-h-6 space-y-1.5 min-w-0 ${isOver ? 'bg-[#1a1421]' : ''}`}>
+      <SortableContext items={columnSkills.map((skill) => skill.id)} strategy={rectSortingStrategy}>
+        {columnSkills.map((skill) => (
+          <SkillCard
+            key={skill.id}
+            skill={skill}
+            onRemove={onRemoveSkill}
+            onUpdateLabel={onUpdateLabel}
+            onUpdateModifier={onUpdateModifier}
+          />
+        ))}
+      </SortableContext>
+    </div>
   );
 }
 
@@ -133,9 +181,8 @@ export default function SkillListEditor({
   onRemoveSkill: (skillId: string) => void;
   onUpdateLabel: (skillId: string, label: string) => void;
   onUpdateModifier: (skillId: string, modifier: number) => void;
-  onReorderSkills: (activeSkillId: string, overSkillId: string) => void;
+  onReorderSkills: (activeSkillId: string, targetColumn: SkillColumn, overSkillId?: string | null) => void;
 }) {
-  const skillIds = useMemo(() => skills.map((skill) => skill.id), [skills]);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
   const handleDragEnd = (event: DragEndEvent) => {
@@ -144,41 +191,50 @@ export default function SkillListEditor({
       return;
     }
 
-    onReorderSkills(String(active.id), String(over.id));
+    const targetColumn = (over.data.current?.column as SkillColumn | undefined) ?? (String(over.id) === 'left' ? 'left' : 'right');
+    const overSkillId = String(over.id) === 'left' || String(over.id) === 'right' ? null : String(over.id);
+
+    onReorderSkills(String(active.id), targetColumn, overSkillId);
   };
 
+  const { left: leftSkills, right: rightSkills } = partitionSkillsByColumn(skills);
+
   return (
-    <div className="border-2 border-[#8a72a8] bg-[#15111a] p-4 shadow-[6px_6px_0_0_#09070d]">
+    <div className="space-y-2">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-[10px] uppercase tracking-[0.18em] text-[#c5d7ff]">Skill Editor</p>
+        <p className="text-[7px] uppercase tracking-[0.18em] text-[#c5d7ff]">Skill Editor</p>
         <button
           type="button"
           onClick={onAddSkill}
-          className="border-2 border-[#86efac] bg-[#17301f] px-3 py-2 text-[10px] text-[#d7ffe5]"
+          className="border border-[#86efac] bg-[#17301f] px-2.5 py-1.5 text-[7px] text-[#d7ffe5]"
         >
           + Add Skill
         </button>
       </div>
 
       {skills.length === 0 ? (
-        <div className="mt-4 border-2 border-dashed border-[#5d4a7a] bg-[#1b1522] px-4 py-8 text-center text-[10px] leading-relaxed text-[#c5b7d8]">
+        <div className="text-center text-[7px] leading-relaxed text-[#c5b7d8]">
           No skills yet. Add one to start building this character sheet.
         </div>
       ) : (
         <DndContext collisionDetection={closestCenter} sensors={sensors} onDragEnd={handleDragEnd}>
-          <SortableContext items={skillIds} strategy={rectSortingStrategy}>
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              {skills.map((skill) => (
-                <SkillCard
-                  key={skill.id}
-                  skill={skill}
-                  onRemove={onRemoveSkill}
-                  onUpdateLabel={onUpdateLabel}
-                  onUpdateModifier={onUpdateModifier}
-                />
-              ))}
-            </div>
-          </SortableContext>
+          <div className="grid grid-cols-[minmax(0,1fr)_1px_minmax(0,1fr)] gap-2">
+            <SkillColumn
+              column="left"
+              columnSkills={leftSkills}
+              onRemoveSkill={onRemoveSkill}
+              onUpdateLabel={onUpdateLabel}
+              onUpdateModifier={onUpdateModifier}
+            />
+            <div className="bg-[#4d3d61]" aria-hidden="true" />
+            <SkillColumn
+              column="right"
+              columnSkills={rightSkills}
+              onRemoveSkill={onRemoveSkill}
+              onUpdateLabel={onUpdateLabel}
+              onUpdateModifier={onUpdateModifier}
+            />
+          </div>
         </DndContext>
       )}
     </div>

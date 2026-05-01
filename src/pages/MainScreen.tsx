@@ -6,7 +6,6 @@ import type { DieRollResult } from '../types/formula'
 import DieResultChip from '../components/DieResultChip'
 import CharacterSheet from '../components/CharacterSheet'
 import AdvantagePrompt from '../components/AdvantagePrompt'
-import ResultPanel from '../components/ResultPanel'
 import { displayDieType } from './formulaHelpers'
 import { useMainScreenController } from '../application/mainScreen/useMainScreenController'
 
@@ -45,15 +44,15 @@ function HistoryItem({
       <button
         type="button"
         onClick={onClick}
-        className="flex w-full items-start justify-between gap-4 border-2 border-[#5d4a7a] bg-[#1b1522] px-3 py-3 text-left shadow-[4px_4px_0_0_#09070d] transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+        className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-4 border-2 border-[#5d4a7a] bg-[#1b1522] px-3 py-3 text-left shadow-[4px_4px_0_0_#09070d] transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
       >
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 overflow-hidden">
           <p className="truncate text-[11px] text-[#f7ead4]">{label}</p>
-          <p className="mt-2 text-[9px] text-[#c5b7d8]">
+          <p className="truncate text-[9px] text-[#c5b7d8]">
             {formatDistanceToNow(rolledAt, { addSuffix: true })}
           </p>
         </div>
-        <p className="text-sm text-[#ffd166]">{total}</p>
+        <p className="self-start whitespace-nowrap text-sm text-[#ffd166]">{total}</p>
       </button>
     </li>
   )
@@ -244,17 +243,6 @@ export default function MainScreen() {
         onChoose={vm.handleCharacterPromptChoose}
         onClose={vm.closeCharacterPrompt}
       />
-
-      {vm.characterRollState && vm.activeProfile ? (
-        <ResultPanel
-          open
-          formulaName={vm.characterRollState.formulaName}
-          formulaString={vm.characterRollState.formulaString}
-          result={vm.characterRollState.result}
-          onClose={vm.closeCharacterRollResult}
-          onRollAgain={vm.rollCharacterAgain}
-        />
-      ) : null}
 
       {vm.isProfileManagerOpen ? (
         <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/75 px-4">

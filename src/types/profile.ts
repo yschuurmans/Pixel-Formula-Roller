@@ -22,6 +22,7 @@ export interface ProfileSkill {
   id: string;
   label: string;
   modifier: number;
+  column?: 'left' | 'right';
 }
 
 export interface Profile {

@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useAppStore } from '../../stores/useAppStore'
+import type { SkillColumn } from '../../utils/profileSkills'
 import { ProfileEditScreenController } from './ProfileEditScreenController'
 
 export function useProfileEditScreenController() {
@@ -59,9 +60,9 @@ export function useProfileEditScreenController() {
     removeProfileSkill(profileId, skillId)
   }, [profileId, removeProfileSkill])
 
-  const handleReorderSkills = useCallback((activeSkillId: string, overSkillId: string) => {
+  const handleReorderSkills = useCallback((activeSkillId: string, targetColumn: SkillColumn, overSkillId?: string | null) => {
     if (!profileId) return
-    reorderProfileSkills(profileId, activeSkillId, overSkillId)
+    reorderProfileSkills(profileId, activeSkillId, targetColumn, overSkillId)
   }, [profileId, reorderProfileSkills])
 
   return {

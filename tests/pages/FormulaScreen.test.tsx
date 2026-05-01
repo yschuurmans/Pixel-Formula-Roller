@@ -102,6 +102,10 @@ function renderFormulaScreen(
             element: <FormulaScreen mode="roll-only" />,
           },
           {
+            path: 'roll',
+            element: <FormulaScreen mode="roll-only" />,
+          },
+          {
             path: 'profiles',
             element: <LocationDisplay />,
           },
@@ -518,6 +522,51 @@ describe('FormulaScreen', () => {
     })
 
     expect(screen.getByTestId('location')).toHaveTextContent('/')
+  })
+
+  it('auto-starts an ad hoc roll-only session from route state and closes back home', async () => {
+    useAppStore.setState({
+      profiles: {
+        default: {
+          id: 'default',
+          name: 'Default',
+          formulas: [],
+          history: [],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+      activeProfileId: 'default',
+      pixels: {
+        'pixel-d20': {
+          pixelId: 'pixel-d20',
+          dieType: 'd20',
+          connectionState: 'connected',
+          batteryLevel: 80,
+          lastFace: null,
+        },
+      },
+    })
+
+    renderFormulaScreen([
+      {
+        pathname: '/roll',
+        state: {
+          formulaText: '1d20+3',
+          name: 'Default - Stealth',
+          focusRollEngine: true,
+        },
+      },
+    ])
+
+    expect(screen.getByRole('heading', { name: 'Default - Stealth' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Cancel roll' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent('/')
+    })
   })
 
   it('glows a connected die, then reprompts after 5 seconds of no settled results', async () => {

@@ -66,6 +66,7 @@ function renderApp(initialEntries: string[]) {
           { path: 'formula/new', element: <FormulaScreen /> },
           { path: 'formula/:id', element: <FormulaScreen /> },
           { path: 'roll/:id', element: <FormulaScreen mode="roll-only" /> },
+          { path: 'roll', element: <FormulaScreen mode="roll-only" /> },
           { path: 'settings', element: <SettingsScreen /> },
           { path: 'profiles', element: <ProfileScreen /> },
         ],

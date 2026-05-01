@@ -37,6 +37,10 @@ const router = createHashRouter([
     element: <FormulaScreen mode="roll-only" />,
   },
   {
+    path: '/roll',
+    element: <FormulaScreen mode="roll-only" />,
+  },
+  {
     path: '/settings',
     element: <SettingsScreen />,
   },
