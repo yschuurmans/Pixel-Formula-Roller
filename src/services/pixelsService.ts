@@ -924,12 +924,12 @@ export class PixelsService {
           }
         }
 
+        if (!rollingFrame) return
+
         // Debug: log rolling-decision so we can correlate with scheduled glows
         try {
           nativeLog('d', '[PixelsService] native-notif-rolling', pixelId, { rollingFrame, matchedPattern })
         } catch {}
-
-        if (!rollingFrame) return
 
         let controller = this.rollingControllers.get(pixelId)
         if (!controller) {

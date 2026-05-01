@@ -9,6 +9,7 @@ import {
   RollEngineSection,
   RollOnlyScreen,
 } from './FormulaScreenSections'
+import ResultPanel from '../components/ResultPanel'
 import { useFormulaScreenController } from '../application/formulaScreen/useFormulaScreenController'
 import type { FormulaScreenMode } from '../application/formulaScreen/FormulaScreenController'
 
@@ -29,7 +30,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     return <Navigate to="/" replace />
   }
 
-  const rollEngineSection = vm.showRollEngine ? (
+  const rollEngineSection = vm.showRollEngine && (vm.isRollOnly || !vm.isResultPanelOpen) ? (
     <RollEngineSection
       rollEngineRef={vm.rollEngineRef}
       currentSequentialSlot={vm.currentSequentialSlot}
@@ -50,6 +51,19 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       }}
       onManualInputChange={vm.handleManualInputChange}
       onSubmitManualRolls={() => void vm.handleSubmitManualRolls()}
+    />
+  ) : null
+
+  const resultPanel = !vm.isRollOnly && vm.completedRollResult ? (
+    <ResultPanel
+      open={vm.isResultPanelOpen}
+      formulaName={vm.name.trim() || undefined}
+      formulaString={vm.formulaText}
+      result={vm.completedRollResult}
+      onRollAgain={() => void vm.handleRoll()}
+      onClose={vm.closeResultPanel}
+      autoHideRemainingMs={vm.autoHideRemainingMs}
+      autoHideDurationMs={10_000}
     />
   ) : null
 

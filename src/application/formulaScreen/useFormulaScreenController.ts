@@ -37,7 +37,6 @@ const DISPLAY_DIE_ORDER = ['d100', 'd20', 'd12', 'd10', 'd8', 'd6', 'd4'] as con
 const FORMULA_ROLL_TRANSITION_DELAY_MS = 1200
 const ROLL_GLOW_REPEAT_MS = 2_000
 const ROLL_GLOW_RESUME_DELAY_MS = 5_000
-const ROLL_GLOW_SUPPRESS_WHILE_PENDING_MS = 24 * 60 * 60 * 1000
 const REMEMBERED_DICE_RETRY_INTERVAL_MS = 2_000
 const MAX_CONNECTED = 12
 
@@ -71,6 +70,7 @@ export function useFormulaScreenController(mode: FormulaScreenMode) {
   const [isReady, setIsReady] = useState(false)
   const [navigationIntent, setNavigationIntent] = useState<NavigationIntent | null>(null)
   const [rollSession, setRollSession] = useState<RollSession | null>(null)
+  const [isResultPanelDismissed, setIsResultPanelDismissed] = useState(false)
   const [manualInputs, setManualInputs] = useState<Record<string, string>>({})
   const [glowPauseUntil, setGlowPauseUntil] = useState<number | null>(null)
   const [autoHideRemainingMs, setAutoHideRemainingMs] = useState<number | null>(null)
@@ -271,9 +271,9 @@ export function useFormulaScreenController(mode: FormulaScreenMode) {
       cancelAllReconnectsDuringRoll()
     } catch {}
 
-    const resumeUntil = Date.now() + ROLL_GLOW_RESUME_DELAY_MS
-    setGlowPauseUntil(resumeUntil)
-    glowPauseUntilRef.current = resumeUntil
+    const suppressUntil = Date.now() + ROLL_GLOW_RESUME_DELAY_MS
+    setGlowPauseUntil(suppressUntil)
+    glowPauseUntilRef.current = suppressUntil
     pendingRollPixelsRef.current.clear()
 
     const result = evaluateFormula(nextSession.parsedFormula, toEvaluatedRolls(nextSession.slots))
@@ -288,6 +288,7 @@ export function useFormulaScreenController(mode: FormulaScreenMode) {
       statusMessage: null,
       historyRecorded: true,
     })
+    setIsResultPanelDismissed(false)
   }, [addRollHistory, clearPendingGlowPrompt, name])
 
   const scrollRollEngineIntoView = useCallback(() => {
@@ -339,11 +340,11 @@ export function useFormulaScreenController(mode: FormulaScreenMode) {
     setFormulaText(normalized.formulaText)
     setFormulaError(null)
 
-    if (!isAwaitingRolls) {
+    if (!isAwaitingRolls && !(rollSession && rollSession.slots.every((slot) => slot.face !== null))) {
       setRollSession(null)
       setManualInputs({})
     }
-  }, [formulaText, isAwaitingRolls])
+  }, [formulaText, isAwaitingRolls, rollSession])
 
   const handleRoll = useCallback(async () => {
     const normalized = normalizeFormulaState(formulaText)
@@ -376,6 +377,7 @@ export function useFormulaScreenController(mode: FormulaScreenMode) {
 
     setManualInputs({})
     suppressScheduledUntilRef.current = Date.now() + FORMULA_ROLL_TRANSITION_DELAY_MS
+    setIsResultPanelDismissed(false)
     setRollSession(nextRoll.session)
     markAssignedPixelsUsed(nextRoll.session.slots)
     pendingRollPixelsRef.current = new Set(nextRoll.pixelIdsToGlow)
@@ -401,6 +403,7 @@ export function useFormulaScreenController(mode: FormulaScreenMode) {
     pendingRollPixelsRef.current.clear()
     setGlowPauseUntil(null)
     glowPauseUntilRef.current = null
+    setIsResultPanelDismissed(true)
     await stopAllGlows()
     try {
       cancelAllReconnectsDuringRoll()
@@ -458,6 +461,18 @@ export function useFormulaScreenController(mode: FormulaScreenMode) {
     }
 
     clearPendingGlowPrompt()
+
+    nativeLog('d', 'all pending glow pixel ids', { pixelIdsToGlow })
+    nativeLog('d', 'checking rolling state of pending glow pixels', { pixelIdsToGlow, pixels: storeState.pixels })
+
+    // If any dice are still rolling or have been rolling in the last ROLL_GLOW_RESUME_DELAY_MS, simply don't execute this glow just yet. The next loop will check again, and if the dice have finished rolling by then, the glow will be allowed to execute.
+    const anyDiceRolling = pixelIdsToGlow.some((id) => storeState.pixels[id]?.isRolling === true)
+    if (anyDiceRolling) {
+      nativeLog('d', 'delaying prompt glow due to rolling dice', { pixelIdsToGlow })
+      return
+    }
+
+
     const now = Date.now()
     if (glowInFlightRef.current && !force) {
       nativeLog('d', 'skipping prompt glow while glow in-flight', { now, lastGlowAt: lastGlowAtRef.current, GLOW_DEDUP_MS })
@@ -753,31 +768,12 @@ export function useFormulaScreenController(mode: FormulaScreenMode) {
       const anyRolling = pendingIds.some((id) => storeState.pixels[id]?.isRolling === true)
 
       if (!anyRolling) {
-        const resumeUntil = Date.now() + ROLL_GLOW_RESUME_DELAY_MS
-        setGlowPauseUntil(resumeUntil)
-        glowPauseUntilRef.current = resumeUntil
-      } else {
-        const suppressUntil = Date.now() + ROLL_GLOW_SUPPRESS_WHILE_PENDING_MS
+        const suppressUntil = Date.now() + ROLL_GLOW_RESUME_DELAY_MS
         setGlowPauseUntil(suppressUntil)
         glowPauseUntilRef.current = suppressUntil
       }
     })
   }, [clearPendingGlowPrompt, isAwaitingRolls])
-
-  useEffect(() => {
-    if (pendingRollPixelsRef.current.size === 0) return
-    const pendingIds = Array.from(pendingRollPixelsRef.current)
-    const anyRolling = pendingIds.some((id) => pixels[id]?.isRolling === true)
-    if (anyRolling) {
-      const suppressUntil = Date.now() + ROLL_GLOW_SUPPRESS_WHILE_PENDING_MS
-      setGlowPauseUntil(suppressUntil)
-      glowPauseUntilRef.current = suppressUntil
-    } else {
-      const resumeUntil = Date.now() + ROLL_GLOW_RESUME_DELAY_MS
-      setGlowPauseUntil(resumeUntil)
-      glowPauseUntilRef.current = resumeUntil
-    }
-  }, [pixels])
 
   useEffect(() => {
     if (!isAwaitingRolls || !rollSession || rollSession.result !== null) {
@@ -1136,6 +1132,7 @@ export function useFormulaScreenController(mode: FormulaScreenMode) {
     firstKeepError,
     formulaText,
     formulaError,
+    isResultPanelOpen: completedRollResult !== null && !isResultPanelDismissed,
     hasRollSession,
     isAwaitingRolls,
     isEditing,
@@ -1183,5 +1180,6 @@ export function useFormulaScreenController(mode: FormulaScreenMode) {
     handleManualInputChange,
     handleSubmitManualRolls,
     promptGlowForRoll: (rollId: string) => promptGlowForRoll(rollId, true),
+    closeResultPanel: () => setIsResultPanelDismissed(true),
   }
 }

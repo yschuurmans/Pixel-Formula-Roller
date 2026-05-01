@@ -382,7 +382,7 @@ export function RollEngineSection({
             </p>
           )}
           {statusMessage ? <p className="mt-2 text-[10px] text-[#ffe7b3]">{statusMessage}</p> : null}
-          {completedTotal !== null ? <p className="mt-2 text-[10px] text-[#86efac]">Total: {completedTotal}</p> : null}
+          {completedTotal !== null ? <p className="mt-2 text-[10px] text-[#86efac]">Grand total: {completedTotal}</p> : null}
         </div>
 
         {isAwaitingRolls ? (

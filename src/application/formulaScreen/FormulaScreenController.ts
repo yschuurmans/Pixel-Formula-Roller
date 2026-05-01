@@ -318,7 +318,7 @@ export class FormulaScreenController {
       ...rollSession,
       statusMessage: null,
       slots: rollSession.slots.map((slot) => {
-        if (slot.face !== null || slot.source !== 'manual') {
+        if (slot.face !== null || manualInputs[slot.id] === undefined) {
           return slot
         }
 
