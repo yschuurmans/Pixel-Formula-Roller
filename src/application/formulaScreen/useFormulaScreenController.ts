@@ -242,6 +242,24 @@ export function useFormulaScreenController(mode: FormulaScreenMode) {
       pendingGlowPromptTimeoutRef.current = null
       const now = Date.now()
 
+      const storeState = useAppStore.getState()
+      const pendingSession = rollSessionRef.current
+      const pendingDieTypes = new Set(
+        pendingSession?.slots.filter((slot) => slot.face === null && slot.source === 'ble').map((slot) => slot.dieType) ?? [],
+      )
+      const anyDiceRolling = Object.values(storeState.pixels).some(
+        (pixel) => pixel.connectionState === 'connected' && pixel.isRolling === true && pendingDieTypes.has(pixel.dieType),
+      )
+
+      if (anyDiceRolling) {
+        const suppressUntil = now + ROLL_GLOW_RESUME_DELAY_MS
+        setGlowPauseUntil(suppressUntil)
+        glowPauseUntilRef.current = suppressUntil
+        lastGlowAtRef.current = now
+        nativeLog('d', 'skipping scheduled glow due to rolling dice', { now, pixelIdsToGlow })
+        return
+      }
+
       if (glowPauseUntilRef.current !== null && glowPauseUntilRef.current > now) {
         nativeLog('d', 'skipping scheduled glow due to glowPauseUntil', { now, glowPauseUntil: glowPauseUntilRef.current })
         return
@@ -455,6 +473,11 @@ export function useFormulaScreenController(mode: FormulaScreenMode) {
       .filter((p) => p.connectionState === 'connected')
       .map((p) => ({ pixelId: p.pixelId, dieType: p.dieType }))
 
+    const pendingDieTypes = new Set(currentSession.slots.filter((slot) => slot.face === null && slot.source === 'ble').map((slot) => slot.dieType))
+    const anyDiceRolling = Object.values(storeState.pixels).some(
+      (pixel) => pixel.connectionState === 'connected' && pixel.isRolling === true && pendingDieTypes.has(pixel.dieType),
+    )
+
     const pixelIdsToGlow = getPendingGlowPixelIds(currentSession.slots, latestConnectedPixels)
     if (pixelIdsToGlow.length === 0) {
       return
@@ -462,16 +485,14 @@ export function useFormulaScreenController(mode: FormulaScreenMode) {
 
     clearPendingGlowPrompt()
 
-    nativeLog('d', 'all pending glow pixel ids', { pixelIdsToGlow })
-    nativeLog('d', 'checking rolling state of pending glow pixels', { pixelIdsToGlow, pixels: storeState.pixels })
-
-    // If any dice are still rolling or have been rolling in the last ROLL_GLOW_RESUME_DELAY_MS, simply don't execute this glow just yet. The next loop will check again, and if the dice have finished rolling by then, the glow will be allowed to execute.
-    const anyDiceRolling = pixelIdsToGlow.some((id) => storeState.pixels[id]?.isRolling === true)
     if (anyDiceRolling) {
+      const suppressUntil = Date.now() + ROLL_GLOW_RESUME_DELAY_MS
+      setGlowPauseUntil(suppressUntil)
+      glowPauseUntilRef.current = suppressUntil
+      lastGlowAtRef.current = Date.now()
       nativeLog('d', 'delaying prompt glow due to rolling dice', { pixelIdsToGlow })
       return
     }
-
 
     const now = Date.now()
     if (glowInFlightRef.current && !force) {

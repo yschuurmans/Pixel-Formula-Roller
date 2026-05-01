@@ -416,7 +416,9 @@ describe('FormulaScreen', () => {
       await Promise.resolve()
     })
 
-    expect(screen.getByText(/Grand total:\s*23/)).toBeInTheDocument()
+    const resultDialog = screen.getByRole('dialog')
+    expect(resultDialog).toHaveTextContent(/Grand total:\s*23/)
+    expect(screen.queryByRole('button', { name: 'Cancel roll' })).not.toBeInTheDocument()
     expect(screen.getByLabelText('Roll screen closes in 10 seconds')).toBeInTheDocument()
 
     await act(async () => {
@@ -689,7 +691,7 @@ describe('FormulaScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Submit manual rolls' }))
 
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Cancel roll' })).not.toBeInTheDocument())
-    expect(screen.getByText(/Grand total:\s*4/)).toBeInTheDocument()
+    expect(await screen.findByRole('dialog')).toHaveTextContent(/Grand total:\s*4/)
     expect(useAppStore.getState().rollHistory).toHaveLength(1)
     expect(useAppStore.getState().rollHistory[0]).toMatchObject({
       formulaString: '1d6',
@@ -714,8 +716,7 @@ describe('FormulaScreen', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Submit manual rolls' }))
 
-    await screen.findByRole('dialog')
-    await waitFor(() => expect(screen.getByText(/Grand total:\s*4/)).toBeInTheDocument(), { timeout: 2000 })
+    expect(await screen.findByRole('dialog')).toHaveTextContent(/Grand total:\s*4/)
     expect(useAppStore.getState().rollHistory[0]).toMatchObject({
       formulaString: '1d100',
       total: 4,
@@ -868,8 +869,8 @@ describe('FormulaScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close result panel' }))
 
     expect(screen.queryByRole('dialog', { name: '1d20' })).not.toBeInTheDocument()
-    await waitFor(() => expect(screen.getByText(/Grand total:\s*18/)).toBeInTheDocument(), { timeout: 2000 })
-    expect(screen.getByText('18')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('main')).toHaveTextContent(/Grand total:\s*18/), { timeout: 2000 })
+    expect(screen.getByRole('main')).toHaveTextContent('18')
 
     fireEvent.click(screen.getByRole('button', { name: 'Roll Again' }))
 
@@ -912,7 +913,7 @@ describe('FormulaScreen', () => {
       rollCallback?.('pixel-d20-b', 7, 'd20')
     })
 
-    await waitFor(() => expect(screen.getByText(/Grand total:\s*18/)).toBeInTheDocument(), { timeout: 2000 })
+    expect(await screen.findByRole('dialog')).toHaveTextContent(/Grand total:\s*18/)
   })
 
   it('accepts either matching die when extra rolls are needed for a shared die type', async () => {
@@ -1004,8 +1005,7 @@ describe('FormulaScreen', () => {
       await Promise.resolve()
     })
 
-    await screen.findByRole('dialog')
-    await waitFor(() => expect(screen.getByText(/Grand total:\s*20/)).toBeInTheDocument(), { timeout: 2000 })
+    expect(await screen.findByRole('dialog')).toHaveTextContent(/Grand total:\s*20/)
   })
 
   it('maps paired zero d% rolls to 100', async () => {
@@ -1022,8 +1022,7 @@ describe('FormulaScreen', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Submit manual rolls' }))
 
-    await screen.findByRole('dialog')
-    await waitFor(() => expect(screen.getByText(/Grand total:\s*100/)).toBeInTheDocument(), { timeout: 2000 })
+    expect(await screen.findByRole('dialog')).toHaveTextContent(/Grand total:\s*100/)
   })
 
   it('glows only the required number of matching connected dice, chosen at random', async () => {

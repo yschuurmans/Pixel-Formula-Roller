@@ -135,7 +135,7 @@ describe('Application behaviour (end-to-end flows)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Submit manual rolls' }))
 
     // Outcome recorded
-    await waitFor(() => expect(screen.getByText(/Grand total:\s*4/)).toBeInTheDocument(), { timeout: 2000 })
+    expect(await screen.findByRole('dialog')).toHaveTextContent(/Grand total:\s*4/)
     expect(useAppStore.getState().rollHistory).toHaveLength(1)
     expect(useAppStore.getState().rollHistory[0]).toMatchObject({ formulaString: '1d6', total: 4 })
   })
@@ -167,10 +167,7 @@ describe('Application behaviour (end-to-end flows)', () => {
       await Promise.resolve()
     })
 
-    await screen.findByRole('dialog')
-    await waitFor(() => expect(screen.getByText(/Grand total:\s*4/)).toBeInTheDocument(), { timeout: 2000 })
-
-    await waitFor(() => expect(screen.getByText(/Grand total:\s*4/)).toBeInTheDocument())
+    expect(await screen.findByRole('dialog')).toHaveTextContent(/Grand total:\s*4/)
     expect(useAppStore.getState().rollHistory[0]).toMatchObject({ formulaString: '1d6', total: 4 })
   })
 

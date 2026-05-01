@@ -30,7 +30,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     return <Navigate to="/" replace />
   }
 
-  const rollEngineSection = vm.showRollEngine && (vm.isRollOnly || !vm.isResultPanelOpen) ? (
+  const rollEngineSection = vm.showRollEngine && !vm.isResultPanelOpen ? (
     <RollEngineSection
       rollEngineRef={vm.rollEngineRef}
       currentSequentialSlot={vm.currentSequentialSlot}
@@ -54,7 +54,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     />
   ) : null
 
-  const resultPanel = !vm.isRollOnly && vm.completedRollResult ? (
+  const resultPanel = vm.completedRollResult ? (
     <ResultPanel
       open={vm.isResultPanelOpen}
       formulaName={vm.name.trim() || undefined}
@@ -69,13 +69,16 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
 
   if (vm.isRollOnly) {
     return (
-      <RollOnlyScreen
-        name={vm.name}
-        formulaText={vm.formulaText}
-        autoHideRemainingMs={vm.autoHideRemainingMs}
-        onClose={vm.navigateHome}
-        rollEngineSection={rollEngineSection}
-      />
+      <>
+        <RollOnlyScreen
+          name={vm.name}
+          formulaText={vm.formulaText}
+          autoHideRemainingMs={vm.completedRollResult ? null : vm.autoHideRemainingMs}
+          onClose={vm.navigateHome}
+          rollEngineSection={rollEngineSection}
+        />
+        {resultPanel}
+      </>
     )
   }
 

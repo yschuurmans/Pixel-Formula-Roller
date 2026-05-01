@@ -182,8 +182,9 @@ export default function ResultPanel({
             </div>
 
             <div className="border-2 border-[#ffd166] bg-[#3b2a11] p-4 text-center shadow-[4px_4px_0_0_#120c06]">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-[#fff0bf]">Grand total:</p>
-              <p className="mt-3 text-lg text-[#fff0bf]">{result.total}</p>
+              <p className="text-[10px] uppercase tracking-[0.18em] text-[#fff0bf]">
+                Grand total: <span className="mt-3 block text-lg text-[#fff0bf]">{result.total}</span>
+              </p>
             </div>
           </div>
         </div>
