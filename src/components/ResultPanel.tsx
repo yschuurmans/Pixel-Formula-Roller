@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { EvaluationResult, DieRollResult } from '../types/formula'
-import formatRollLabel from '../utils/formatRollLabel'
 import { AutoHideCountdown } from '../pages/formulaHelpers'
+import DieResultChip from './DieResultChip'
 
 export default function ResultPanel({
   open,
@@ -148,28 +148,42 @@ export default function ResultPanel({
             </div>
           </div>
 
-          <div className="mt-4">
-            {result.groups.map((group, groupIndex) => (
-              <div key={`${group.dieType}-${groupIndex}`} className="mt-3 border-t border-[#35518a] pt-3">
-                <h3 className="text-[10px] uppercase tracking-[0.16em] text-[#c5d7d8]">{group.dieType === 'd100' ? 'd%' : group.dieType}</h3>
-                <ul className="mt-2 space-y-1">
-                  {group.rolls.map((roll: DieRollResult, idx: number) => (
-                    <li key={idx} className="flex items-center justify-between text-[10px] text-[#d8cef1]">
-                      <span>{formatRollLabel(roll, idx)}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
+          <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_120px]">
+            <div className="border-2 border-[#5d4a7a] bg-[#1b1522] p-4 shadow-[4px_4px_0_0_#09070d]">
+              <p className="text-[10px] uppercase tracking-[0.18em] text-[#c5d7ff]">Dice Results</p>
 
-            {result.flatModifier !== 0 ? (
-              <div className="mt-4 border-t border-[#35518a] pt-3">
-                <p className="text-[10px] text-[#d8cef1]">Modifier: {result.flatModifier > 0 ? `+${result.flatModifier}` : result.flatModifier}</p>
-              </div>
-            ) : null}
+              <div className="mt-4 space-y-4">
+                {result.groups.map((group, groupIndex) => (
+                  <div key={`${group.dieType}-${groupIndex}`} className="border-t border-[#4d3d61] pt-4 first:border-t-0 first:pt-0">
+                    <h3 className="text-[10px] uppercase tracking-[0.18em] text-[#c5d7ff]">
+                      {group.dieType === 'd100' ? 'd%' : group.dieType}
+                    </h3>
 
-            <div className="mt-4">
-              <p className="text-lg font-bold text-[#fff0bf]">Grand total: {result.total}</p>
+                    <div className="mt-3 flex flex-wrap gap-3">
+                      {group.rolls.map((roll: DieRollResult, index: number) => (
+                        <DieResultChip
+                          key={`${group.dieType}-${groupIndex}-${index}-${roll.face}`}
+                          dieType={roll.dieType}
+                          face={roll.face}
+                          dropped={!roll.kept}
+                          ariaLabel={`${group.dieType === 'd100' ? 'd%' : group.dieType} #${index + 1} result ${roll.face}${roll.kept ? '' : ' dropped'}`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+
+                {result.flatModifier !== 0 ? (
+                  <div className="border-t border-[#4d3d61] pt-4 text-[10px] text-[#c5d7ff]">
+                    Flat modifier: {result.flatModifier > 0 ? `+${result.flatModifier}` : result.flatModifier}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="border-2 border-[#ffd166] bg-[#3b2a11] p-4 text-center shadow-[4px_4px_0_0_#120c06]">
+              <p className="text-[10px] uppercase tracking-[0.18em] text-[#fff0bf]">Total</p>
+              <p className="mt-3 text-lg text-[#fff0bf]">{result.total}</p>
             </div>
           </div>
         </div>
