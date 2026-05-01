@@ -15,8 +15,8 @@ import {
   extractRequiredDice,
   formulaToPickerState,
   pickerStateToFormula,
-} from '../formulaParser';
-import type { DieRollResult } from '../../types/formula';
+} from '../../src/services/formulaParser';
+import type { DieRollResult } from '../../src/types/formula';
 
 // ---------------------------------------------------------------------------
 // Helpers

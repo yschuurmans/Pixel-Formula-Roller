@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { PixelsService, getBleUnavailableMessage, batteryToHighlightAction } from '../pixelsService'
+import { PixelsService, getBleUnavailableMessage, batteryToHighlightAction } from '../../src/services/pixelsService'
 import { DiceUtils, getFaceMask } from '@systemic-games/pixels-core-animation'
-import { useAppStore } from '../../stores/useAppStore'
+import { useAppStore } from '../../src/stores/useAppStore'
 
 const {
   getBleAvailabilityMock,
@@ -23,8 +23,8 @@ const {
   getBluetoothCapabilitiesMock: vi.fn(() => ({ bluetooth: true, persistentPermissions: true })),
 }))
 
-vi.mock('../pixelsTransport', async () => {
-  const actual = await vi.importActual<typeof import('../pixelsTransport')>('../pixelsTransport')
+vi.mock('../../src/services/pixelsTransport', async () => {
+  const actual = await vi.importActual<typeof import('../../src/services/pixelsTransport')>('../../src/services/pixelsTransport')
   return {
     ...actual,
     getBleAvailability: getBleAvailabilityMock,

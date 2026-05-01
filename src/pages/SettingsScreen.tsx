@@ -16,6 +16,7 @@ import {
 import DieIcon from '../components/DieIcon'
 import type { DieType } from '../types/formula'
 import { useAppStore } from '../stores/useAppStore'
+import { displayDieType } from './formulaHelpers'
 
 const CLEANUP_DIE_ORDER: DieType[] = ['d4', 'd6', 'd8', 'd10', 'd12', 'd20', 'd100']
 const CLEANUP_RECONNECT_INTERVAL_MS = 2_000
@@ -24,10 +25,6 @@ const CLEANUP_BASE_GLOW = { r: 40, g: 40, b: 40 } as const
 // Explicit, semantic names: TOP should be green, BOTTOM should be red.
 const CLEANUP_TOP_FACE_GLOW = { r: 34, g: 255, b: 94 } as const
 const CLEANUP_BOTTOM_FACE_GLOW = { r: 255, g: 68, b: 68 } as const
-
-function displayDieType(dieType: DieType): string {
-  return dieType === 'd100' ? 'd%' : dieType
-}
 
 function connectionStatusLabel(connectionState: 'connected' | 'disconnected'): string {
   return connectionState === 'connected' ? 'Connected' : 'Disconnected'

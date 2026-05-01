@@ -11,8 +11,9 @@ import {
   type SavedFormula,
   useAppStore,
 } from '../stores/useAppStore'
-import type { DieRollResult, DieType } from '../types/formula'
+import type { DieRollResult } from '../types/formula'
 import DieResultChip from '../components/DieResultChip'
+import { displayDieType } from './formulaHelpers'
 
 type ToastState = {
   id: number
@@ -73,10 +74,6 @@ function HistoryItem({
       </button>
     </li>
   )
-}
-
-function displayDieType(dieType: DieType): string {
-  return dieType === 'd100' ? 'd%' : dieType
 }
 
 function formatRollLabel(roll: DieRollResult, index: number): string {
