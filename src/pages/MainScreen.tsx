@@ -75,8 +75,8 @@ export default function MainScreen() {
 
         <header className="mb-6 flex flex-col gap-4 border-2 border-[#8a72a8] bg-[#1a1421] p-4 shadow-[6px_6px_0_0_#0b0810] md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="text-[10px] uppercase tracking-[0.25em] text-[#c5b7d8]">Launchpad</p>
-            <h1 className="mt-3 text-lg leading-snug text-[#f7ead4]">Pixels Roller</h1>
+            <p className="text-[10px] uppercase tracking-[0.25em] text-[#c5b7d8]">Pixels Roller</p>
+            <h1 className="mt-3 text-lg leading-snug text-[#f7ead4]">{vm.activeProfile?.name ?? 'Default'}</h1>
           </div>
 
           <div className="flex gap-3">
@@ -86,6 +86,14 @@ export default function MainScreen() {
               className="border-2 border-[#86efac] bg-[#17301f] px-4 py-3 text-[10px] text-[#d7ffe5] shadow-[4px_4px_0_0_#09130c] transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
             >
               + New
+            </button>
+            <button
+              type="button"
+              onClick={vm.navigateToProfiles}
+              aria-label="Open profiles"
+              className="border-2 border-[#ffd166] bg-[#3b2a11] px-4 py-3 text-[10px] text-[#fff0bf] shadow-[4px_4px_0_0_#120c06] transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+            >
+              Profiles
             </button>
             <button
               type="button"
@@ -215,6 +223,171 @@ export default function MainScreen() {
           </section>
         </div>
       </div>
+
+      {vm.isProfileManagerOpen ? (
+        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/75 px-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-2xl border-2 border-[#7dd3fc] bg-[#15111a] p-5 shadow-[8px_8px_0_0_#09070d]"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.18em] text-[#c5d7ff]">Profiles</p>
+                <h2 className="mt-3 text-sm text-[#f7ead4]">Manage profile sets</h2>
+                <p className="mt-2 text-[9px] leading-relaxed text-[#c5b7d8]">
+                  Switch formulas and roll history without changing settings or BLE connections.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={vm.closeProfileManager}
+                className="border-2 border-[#7d6b95] bg-[#251d2e] px-3 py-2 text-[10px] text-[#f7ead4]"
+              >
+                Close
+              </button>
+            </div>
+
+            {vm.profileError ? (
+              <div className="mt-4 border-2 border-[#ffcc66] bg-[#362813] px-4 py-3 text-[10px] leading-relaxed text-[#ffe7b3]">
+                {vm.profileError}
+              </div>
+            ) : null}
+
+            <div className="mt-5 border-2 border-[#5d4a7a] bg-[#1b1522] p-4">
+              <label className="block text-[10px] uppercase tracking-[0.16em] text-[#c5b7d8]">
+                Create profile
+              </label>
+              <div className="mt-3 flex flex-col gap-3 md:flex-row">
+                <input
+                  value={vm.newProfileName}
+                  onChange={(event) => vm.setNewProfileName(event.target.value)}
+                  placeholder="New profile name"
+                  className="min-w-0 flex-1 border-2 border-[#7d6b95] bg-[#110d16] px-3 py-3 text-[10px] text-[#f7ead4] outline-none placeholder:text-[#7c7190]"
+                />
+                <button
+                  type="button"
+                  onClick={vm.createProfileFromInput}
+                  className="border-2 border-[#86efac] bg-[#17301f] px-4 py-3 text-[10px] text-[#d7ffe5]"
+                >
+                  Create
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-3">
+              {vm.profileList.map((profile) => {
+                const isActive = profile.id === vm.activeProfileId
+                const isRenaming = vm.renamingProfile?.id === profile.id
+
+                return (
+                  <article
+                    key={profile.id}
+                    className={`border-2 px-3 py-3 shadow-[4px_4px_0_0_#09070d] ${isActive ? 'border-[#ffd166] bg-[#2a2111]' : 'border-[#5d4a7a] bg-[#1b1522]'}`}
+                  >
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <div>
+                        <p className="text-[10px] uppercase tracking-[0.16em] text-[#c5b7d8]">
+                          {isActive ? 'Active' : 'Profile'}
+                        </p>
+                        <h3 className="mt-2 text-sm text-[#f7ead4]">{profile.name}</h3>
+                        <p className="mt-2 text-[9px] text-[#c5b7d8]">
+                          {profile.formulas.length} formulas · {profile.history.length} rolls
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => vm.handleSelectProfile(profile.id)}
+                          disabled={isActive}
+                          className="border-2 border-[#7dd3fc] bg-[#102a3a] px-3 py-2 text-[10px] text-[#d9f3ff] disabled:cursor-not-allowed disabled:border-[#4b5b63] disabled:bg-[#21272a] disabled:text-[#8d9aa0]"
+                        >
+                          {isActive ? 'Selected' : 'Select'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => vm.startRenameProfile(profile)}
+                          className="border-2 border-[#f8a5c2] bg-[#351826] px-3 py-2 text-[10px] text-[#ffe0ec]"
+                        >
+                          Rename
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => vm.requestDeleteProfile(profile)}
+                          className="border-2 border-[#ff8f66] bg-[#3c1d10] px-3 py-2 text-[10px] text-[#ffe2d6]"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+
+                    {isRenaming ? (
+                      <div className="mt-4 border-2 border-[#7d6b95] bg-[#110d16] p-3">
+                        <label className="block text-[10px] uppercase tracking-[0.16em] text-[#c5b7d8]">
+                          Rename profile
+                        </label>
+                        <div className="mt-3 flex flex-col gap-3 md:flex-row">
+                          <input
+                            value={vm.renameProfileName}
+                            onChange={(event) => vm.setRenameProfileName(event.target.value)}
+                            className="min-w-0 flex-1 border-2 border-[#7d6b95] bg-[#1a1421] px-3 py-3 text-[10px] text-[#f7ead4] outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={vm.saveRenameProfile}
+                            className="border-2 border-[#86efac] bg-[#17301f] px-4 py-3 text-[10px] text-[#d7ffe5]"
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={vm.cancelRenameProfile}
+                            className="border-2 border-[#7d6b95] bg-[#251d2e] px-4 py-3 text-[10px] text-[#f7ead4]"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </article>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {vm.profileToDelete ? (
+        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/75 px-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-md border-2 border-[#ff9aa2] bg-[#1a1421] p-5 shadow-[8px_8px_0_0_#09070d]"
+          >
+            <h2 className="text-sm text-[#f7ead4]">Delete profile?</h2>
+            <p className="mt-4 text-[10px] leading-relaxed text-[#d8cef1]">
+              '{vm.profileToDelete.name}' and its formula history will be permanently removed.
+            </p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={vm.cancelDeleteProfile}
+                className="border-2 border-[#7d6b95] bg-[#251d2e] px-4 py-3 text-[10px] text-[#f7ead4]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={vm.confirmDeleteProfile}
+                className="border-2 border-[#ff6b6b] bg-[#4a1515] px-4 py-3 text-[10px] text-[#ffe1e1]"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {vm.formulaToDelete ? (
         <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/75 px-4">

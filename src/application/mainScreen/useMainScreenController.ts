@@ -4,6 +4,8 @@ import { connectDie, glowDie } from '../../services/pixelsService'
 import {
   STORAGE_WARNING_EVENT,
   STORAGE_WARNING_MESSAGE,
+  getActiveProfileState,
+  type Profile,
   type RollHistoryEntry,
   type SavedFormula,
   useAppStore,
@@ -21,16 +23,26 @@ export function useMainScreenController() {
   const navigate = useNavigate()
   const location = useLocation()
   const locationState = location.state as MainScreenLocationState | null
-  const savedFormulas = useAppStore((state) => state.savedFormulas)
-  const rollHistory = useAppStore((state) => state.rollHistory)
+  const profiles = useAppStore((state) => state.profiles)
+  const activeProfileId = useAppStore((state) => state.activeProfileId)
   const bleAvailable = useAppStore((state) => state.bleAvailable)
   const bleError = useAppStore((state) => state.bleError)
   const pixels = useAppStore((state) => state.pixels)
   const deleteSavedFormula = useAppStore((state) => state.deleteSavedFormula)
   const clearBleError = useAppStore((state) => state.clearBleError)
+  const createProfile = useAppStore((state) => state.createProfile)
+  const renameProfile = useAppStore((state) => state.renameProfile)
+  const deleteProfile = useAppStore((state) => state.deleteProfile)
+  const selectProfile = useAppStore((state) => state.selectProfile)
 
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null)
   const [formulaToDelete, setFormulaToDelete] = useState<SavedFormula | null>(null)
+  const [isProfileManagerOpen, setIsProfileManagerOpen] = useState(false)
+  const [newProfileName, setNewProfileName] = useState('')
+  const [renamingProfile, setRenamingProfile] = useState<Profile | null>(null)
+  const [renameProfileName, setRenameProfileName] = useState('')
+  const [profileToDelete, setProfileToDelete] = useState<Profile | null>(null)
+  const [profileError, setProfileError] = useState<string | null>(null)
   const [isHistoryDialogOpen, setIsHistoryDialogOpen] = useState(false)
   const [isQuickConnecting, setIsQuickConnecting] = useState(false)
   const [selectedHistoryEntry, setSelectedHistoryEntry] = useState<RollHistoryEntry | null>(null)
@@ -41,9 +53,109 @@ export function useMainScreenController() {
   const quickConnectHoldTriggered = useRef(false)
 
   const bannerMessage = useMemo(() => controller.getBannerMessage(bleAvailable), [bleAvailable, controller])
+  const connectedPixelIds = useMemo(() => controller.getConnectedPixelIds(pixels), [controller, pixels])
+  const profileList = useMemo(
+    () => Object.values(profiles).sort((left, right) => left.createdAt - right.createdAt),
+    [profiles],
+  )
+  const activeProfile = useMemo(
+    () => getActiveProfileState({ profiles, activeProfileId }),
+    [activeProfileId, profiles],
+  )
+  const savedFormulas = activeProfile?.formulas ?? []
+  const rollHistory = activeProfile?.history ?? []
   const recentHistory = useMemo(() => controller.getRecentHistory(rollHistory), [controller, rollHistory])
   const fullHistory = useMemo(() => controller.getFullHistory(rollHistory), [controller, rollHistory])
-  const connectedPixelIds = useMemo(() => controller.getConnectedPixelIds(pixels), [controller, pixels])
+
+  const openProfileManager = useCallback(() => {
+    setProfileError(null)
+    setIsProfileManagerOpen(true)
+  }, [])
+
+  const closeProfileManager = useCallback(() => {
+    setIsProfileManagerOpen(false)
+    setNewProfileName('')
+    setRenamingProfile(null)
+    setRenameProfileName('')
+    setProfileToDelete(null)
+    setProfileError(null)
+  }, [])
+
+  const createProfileFromInput = useCallback(() => {
+    const createdId = createProfile(newProfileName)
+    if (!createdId) {
+      setProfileError('Profile name must be non-empty and unique')
+      return false
+    }
+
+    setNewProfileName('')
+    setProfileError(null)
+    setIsProfileManagerOpen(false)
+    return true
+  }, [createProfile, newProfileName])
+
+  const startRenameProfile = useCallback((profile: Profile) => {
+    setRenamingProfile(profile)
+    setRenameProfileName(profile.name)
+    setProfileError(null)
+  }, [])
+
+  const cancelRenameProfile = useCallback(() => {
+    setRenamingProfile(null)
+    setRenameProfileName('')
+  }, [])
+
+  const saveRenameProfile = useCallback(() => {
+    if (!renamingProfile) {
+      return false
+    }
+
+    const renamed = renameProfile(renamingProfile.id, renameProfileName)
+    if (!renamed) {
+      setProfileError('Profile name must be non-empty and unique')
+      return false
+    }
+
+    setRenamingProfile(null)
+    setRenameProfileName('')
+    setProfileError(null)
+    return true
+  }, [renameProfile, renameProfileName, renamingProfile])
+
+  const requestDeleteProfile = useCallback((profile: Profile) => {
+    setProfileToDelete(profile)
+    setProfileError(null)
+  }, [])
+
+  const cancelDeleteProfile = useCallback(() => {
+    setProfileToDelete(null)
+  }, [])
+
+  const confirmDeleteProfile = useCallback(() => {
+    if (!profileToDelete) {
+      return false
+    }
+
+    const deleted = deleteProfile(profileToDelete.id)
+    if (!deleted) {
+      setProfileError('The last remaining profile cannot be deleted')
+      return false
+    }
+
+    setProfileToDelete(null)
+    return true
+  }, [deleteProfile, profileToDelete])
+
+  const handleSelectProfile = useCallback((profileId: string) => {
+    if (!selectProfile(profileId)) {
+      setProfileError('Profile not found')
+      return false
+    }
+
+    setIsProfileManagerOpen(false)
+    setProfileError(null)
+    return true
+  }, [selectProfile])
 
   const clearQuickConnectHoldTimer = useCallback(() => {
     if (quickConnectHoldTimer.current !== null) {
@@ -181,6 +293,15 @@ export function useMainScreenController() {
     activeMenuId,
     bannerMessage,
     bleAvailable,
+    activeProfile,
+    activeProfileId,
+    profileList,
+    isProfileManagerOpen,
+    newProfileName,
+    renamingProfile,
+    renameProfileName,
+    profileToDelete,
+    profileError,
     formulaToDelete,
     fullHistory,
     isHistoryDialogOpen,
@@ -189,8 +310,21 @@ export function useMainScreenController() {
     savedFormulas,
     selectedHistoryEntry,
     toast,
+    openProfileManager,
+    closeProfileManager,
+    setNewProfileName,
+    createProfileFromInput,
+    startRenameProfile,
+    cancelRenameProfile,
+    setRenameProfileName,
+    saveRenameProfile,
+    requestDeleteProfile,
+    cancelDeleteProfile,
+    confirmDeleteProfile,
+    handleSelectProfile,
     navigateToNewFormula: () => navigate('/formula/new'),
     navigateToSettings: () => navigate('/settings'),
+    navigateToProfiles: () => navigate('/profiles'),
     navigateToEditFormula: (formulaId: string) => navigate(`/formula/${formulaId}`),
     navigateToRollFormula: (formulaId: string) => navigate(`/roll/${formulaId}`),
     openFormulaMenu: (formulaId: string) => setActiveMenuId((current) => (current === formulaId ? null : formulaId)),

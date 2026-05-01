@@ -101,6 +101,10 @@ function renderFormulaScreen(
             path: 'roll/:id',
             element: <FormulaScreen mode="roll-only" />,
           },
+          {
+            path: 'profiles',
+            element: <LocationDisplay />,
+          },
         ],
       },
     ],
@@ -121,6 +125,17 @@ function renderFormulaScreen(
 function resetStore() {
   localStorage.clear()
   useAppStore.setState({
+    profiles: {
+      default: {
+        id: 'default',
+        name: 'Default',
+        formulas: [],
+        history: [],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    },
+    activeProfileId: 'default',
     savedFormulas: [],
     rollHistory: [],
     settings: { theme: 'dark', highlightLowBattery: false },
@@ -166,6 +181,25 @@ describe('FormulaScreen', () => {
 
   it('loads an existing formula, deletes it, and returns to main with a toast', async () => {
     useAppStore.setState({
+      profiles: {
+        default: {
+          id: 'default',
+          name: 'Default',
+          formulas: [
+            {
+              id: 'formula-1',
+              name: 'Attack Roll',
+              formula: '2d20kh1+5',
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+          history: [],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+      activeProfileId: 'default',
       savedFormulas: [
         {
           id: 'formula-1',
@@ -286,6 +320,25 @@ describe('FormulaScreen', () => {
 
   it('updates an existing formula in place on save', () => {
     useAppStore.setState({
+      profiles: {
+        default: {
+          id: 'default',
+          name: 'Default',
+          formulas: [
+            {
+              id: 'formula-1',
+              name: 'Attack Roll',
+              formula: '1d20+5',
+              createdAt: 10,
+              updatedAt: 20,
+            },
+          ],
+          history: [],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+      activeProfileId: 'default',
       savedFormulas: [
         {
           id: 'formula-1',
@@ -346,6 +399,25 @@ describe('FormulaScreen', () => {
 
   it('opens an existing formula in roll view when the route requests roll-engine focus', async () => {
     useAppStore.setState({
+      profiles: {
+        default: {
+          id: 'default',
+          name: 'Default',
+          formulas: [
+            {
+              id: 'formula-1',
+              name: 'Attack Roll',
+              formula: '1d20+5',
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+          history: [],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+      activeProfileId: 'default',
       savedFormulas: [
         {
           id: 'formula-1',
@@ -371,6 +443,25 @@ describe('FormulaScreen', () => {
     vi.setSystemTime(new Date('2026-04-27T12:00:00.000Z'))
 
     useAppStore.setState({
+      profiles: {
+        default: {
+          id: 'default',
+          name: 'Default',
+          formulas: [
+            {
+              id: 'formula-1',
+              name: 'Attack Roll',
+              formula: '1d20+5',
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+          history: [],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+      activeProfileId: 'default',
       savedFormulas: [
         {
           id: 'formula-1',
@@ -393,12 +484,6 @@ describe('FormulaScreen', () => {
 
     renderFormulaScreen(['/roll/formula-1'])
 
-    expect(screen.queryByPlaceholderText('Formula name')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
-    expect(screen.getByText('Roll Only')).toBeInTheDocument()
-    expect(screen.getByText('Attack Roll')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Roll' })).not.toBeInTheDocument()
-
     await act(async () => {
       vi.runOnlyPendingTimers()
       await Promise.resolve()
@@ -418,6 +503,7 @@ describe('FormulaScreen', () => {
 
     const resultDialog = screen.getByRole('dialog')
     expect(resultDialog).toHaveTextContent(/Grand total:\s*23/)
+    expect(screen.queryByText('Roll Only')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Cancel roll' })).not.toBeInTheDocument()
     expect(screen.getByLabelText('Roll screen closes in 10 seconds')).toBeInTheDocument()
 

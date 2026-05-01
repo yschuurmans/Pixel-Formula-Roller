@@ -65,6 +65,17 @@ function renderSettingsScreen() {
 function resetStore() {
   localStorage.clear()
   useAppStore.setState({
+    profiles: {
+      default: {
+        id: 'default',
+        name: 'Default',
+        formulas: [],
+        history: [],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    },
+    activeProfileId: 'default',
     savedFormulas: [],
     rollHistory: [],
     settings: { theme: 'dark', highlightLowBattery: false },

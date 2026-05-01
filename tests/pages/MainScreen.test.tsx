@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import MainScreen from '../../src/pages/MainScreen'
+import ProfileScreen from '../../src/pages/ProfileScreen'
 import { ROLL_HISTORY_STORAGE_LIMIT, STORAGE_WARNING_EVENT, type RollHistoryEntry, useAppStore } from '../../src/stores/useAppStore'
 
 const {
@@ -34,6 +35,7 @@ function renderMainScreen() {
         <Route path="/roll/:id" element={<LocationDisplay />} />
         <Route path="/formula/new" element={<LocationDisplay />} />
         <Route path="/settings" element={<LocationDisplay />} />
+        <Route path="/profiles" element={<><ProfileScreen /><LocationDisplay /></>} />
       </Routes>
     </MemoryRouter>,
   )
@@ -67,10 +69,22 @@ function baseHistoryEntry(): RollHistoryEntry {
 function resetStore() {
   localStorage.clear()
   useAppStore.setState({
+    profiles: {
+      default: {
+        id: 'default',
+        name: 'Default',
+        formulas: [],
+        history: [],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    },
+    activeProfileId: 'default',
     savedFormulas: [],
     rollHistory: [],
     settings: { theme: 'dark', highlightLowBattery: false },
     pairedPixelIds: [],
+    pairedPixels: {},
     bleAvailable: true,
     bleError: null,
     pixels: {},
@@ -89,11 +103,54 @@ describe('MainScreen', () => {
   it('shows empty states and navigation actions', () => {
     renderMainScreen()
 
+    expect(screen.getByText('Pixels Roller')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Default' })).toBeInTheDocument()
     expect(screen.getByText('No saved formulas yet — tap + to add one')).toBeInTheDocument()
     expect(screen.getByText('No rolls yet')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '+ New' }))
     expect(screen.getByTestId('location')).toHaveTextContent('/formula/new')
+  })
+
+  it('populates formulas and history from the active profile on startup', () => {
+    useAppStore.setState({
+      profiles: {
+        default: {
+          id: 'default',
+          name: 'Default',
+          formulas: [
+            {
+              id: 'formula-1',
+              name: 'Fireball',
+              formula: '8d6',
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+          history: [createHistoryEntry({ id: 'history-1', formulaName: 'Fireball', total: 28 })],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+      activeProfileId: 'default',
+      savedFormulas: [],
+      rollHistory: [],
+    })
+
+    renderMainScreen()
+
+    expect(screen.getByRole('heading', { name: 'Fireball' })).toBeInTheDocument()
+    expect(screen.getByText('8d6')).toBeInTheDocument()
+    expect(screen.queryByText('No rolls yet')).not.toBeInTheDocument()
+    expect(screen.getByText('Fireball', { selector: 'p' })).toBeInTheDocument()
+  })
+
+  it('navigates to the profiles screen from the header', () => {
+    renderMainScreen()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open profiles' }))
+
+    expect(screen.getByTestId('location')).toHaveTextContent('/profiles')
   })
 
   it('runs quick connect from the header button and shows a spinner while pending', async () => {
@@ -164,15 +221,25 @@ describe('MainScreen', () => {
 
   it('renders saved formulas and navigates when a card body is clicked', () => {
     useAppStore.setState({
-      savedFormulas: [
-        {
-          id: 'formula-1',
-          name: 'Fireball',
-          formula: '8d6',
+      profiles: {
+        default: {
+          id: 'default',
+          name: 'Default',
+          formulas: [
+            {
+              id: 'formula-1',
+              name: 'Fireball',
+              formula: '8d6',
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+          history: [],
           createdAt: 1,
           updatedAt: 1,
         },
-      ],
+      },
+      savedFormulas: [],
     })
 
     renderMainScreen()
@@ -183,15 +250,25 @@ describe('MainScreen', () => {
 
   it('opens the delete modal, removes the formula, and shows a toast', () => {
     useAppStore.setState({
-      savedFormulas: [
-        {
-          id: 'formula-1',
-          name: 'Fireball',
-          formula: '8d6',
+      profiles: {
+        default: {
+          id: 'default',
+          name: 'Default',
+          formulas: [
+            {
+              id: 'formula-1',
+              name: 'Fireball',
+              formula: '8d6',
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+          history: [],
           createdAt: 1,
           updatedAt: 1,
         },
-      ],
+      },
+      savedFormulas: [],
     })
 
     renderMainScreen()
@@ -203,7 +280,7 @@ describe('MainScreen', () => {
     expect(within(dialog).getByText('Delete formula?')).toBeInTheDocument()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
 
-    expect(useAppStore.getState().savedFormulas).toHaveLength(0)
+    expect(useAppStore.getState().profiles.default.formulas).toHaveLength(0)
     expect(screen.getByText('Formula deleted')).toBeInTheDocument()
   })
 
@@ -212,14 +289,24 @@ describe('MainScreen', () => {
     vi.setSystemTime(new Date('2026-04-27T12:00:00.000Z'))
 
     useAppStore.setState({
-      rollHistory: [
-        createHistoryEntry({ id: 'one', formulaName: 'Fireball', total: 28, rolledAt: Date.now() - 30_000 }),
-        createHistoryEntry({ id: 'two', formulaName: '', formulaString: '2d6+3', total: 11, rolledAt: Date.now() - 60_000 }),
-        createHistoryEntry({ id: 'three', formulaName: 'Sneak Attack', total: 19, rolledAt: Date.now() - 90_000 }),
-        createHistoryEntry({ id: 'four', formulaName: 'Shield Bash', total: 9, rolledAt: Date.now() - 120_000 }),
-        createHistoryEntry({ id: 'five', formulaName: 'Ray of Frost', total: 14, rolledAt: Date.now() - 150_000 }),
-        createHistoryEntry({ id: 'six', formulaName: 'Guiding Bolt', total: 21, rolledAt: Date.now() - 180_000 }),
-      ],
+      profiles: {
+        default: {
+          id: 'default',
+          name: 'Default',
+          formulas: [],
+          history: [
+            createHistoryEntry({ id: 'one', formulaName: 'Fireball', total: 28, rolledAt: Date.now() - 30_000 }),
+            createHistoryEntry({ id: 'two', formulaName: '', formulaString: '2d6+3', total: 11, rolledAt: Date.now() - 60_000 }),
+            createHistoryEntry({ id: 'three', formulaName: 'Sneak Attack', total: 19, rolledAt: Date.now() - 90_000 }),
+            createHistoryEntry({ id: 'four', formulaName: 'Shield Bash', total: 9, rolledAt: Date.now() - 120_000 }),
+            createHistoryEntry({ id: 'five', formulaName: 'Ray of Frost', total: 14, rolledAt: Date.now() - 150_000 }),
+            createHistoryEntry({ id: 'six', formulaName: 'Guiding Bolt', total: 21, rolledAt: Date.now() - 180_000 }),
+          ],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+      rollHistory: [],
     })
 
     renderMainScreen()
@@ -239,33 +326,43 @@ describe('MainScreen', () => {
 
   it('opens an expanded history dialog with formula and die results', () => {
     useAppStore.setState({
-      rollHistory: [
-        createHistoryEntry({
-          id: 'detail-entry',
-          formulaName: 'Advantage Attack',
-          formulaString: '2d20kh1+5',
-          total: 23,
-          result: {
-            groups: [
-              {
-                dieType: 'd20',
-                rolls: [
-                  { dieType: 'd20', face: 18, kept: true, source: 'ble' },
-                  { dieType: 'd20', face: 7, kept: false, source: 'ble' },
+      profiles: {
+        default: {
+          id: 'default',
+          name: 'Default',
+          formulas: [],
+          history: [
+            createHistoryEntry({
+              id: 'detail-entry',
+              formulaName: 'Advantage Attack',
+              formulaString: '2d20kh1+5',
+              total: 23,
+              result: {
+                groups: [
+                  {
+                    dieType: 'd20',
+                    rolls: [
+                      { dieType: 'd20', face: 18, kept: true, source: 'ble' },
+                      { dieType: 'd20', face: 7, kept: false, source: 'ble' },
+                    ],
+                  },
                 ],
+                flatModifier: 5,
+                total: 23,
               },
-            ],
-            flatModifier: 5,
-            total: 23,
-          },
-          parsedFormula: {
-            groups: [{ dieType: 'd20', count: 2, keep: { mode: 'kh', n: 1 } }],
-            flatModifier: 5,
-            raw: '2d20kh1+5',
-            canonical: '2d20kh1+5',
-          },
-        }),
-      ],
+              parsedFormula: {
+                groups: [{ dieType: 'd20', count: 2, keep: { mode: 'kh', n: 1 } }],
+                flatModifier: 5,
+                raw: '2d20kh1+5',
+                canonical: '2d20kh1+5',
+              },
+            }),
+          ],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+      rollHistory: [],
     })
 
     renderMainScreen()

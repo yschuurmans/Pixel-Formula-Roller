@@ -61,24 +61,25 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       formulaString={vm.formulaText}
       result={vm.completedRollResult}
       onRollAgain={() => void vm.handleRoll()}
-      onClose={vm.closeResultPanel}
+      onClose={vm.isRollOnly ? vm.navigateHome : vm.closeResultPanel}
       autoHideRemainingMs={vm.autoHideRemainingMs}
       autoHideDurationMs={10_000}
     />
   ) : null
 
   if (vm.isRollOnly) {
+    if (vm.completedRollResult) {
+      return resultPanel
+    }
+
     return (
-      <>
-        <RollOnlyScreen
-          name={vm.name}
-          formulaText={vm.formulaText}
-          autoHideRemainingMs={vm.completedRollResult ? null : vm.autoHideRemainingMs}
-          onClose={vm.navigateHome}
-          rollEngineSection={rollEngineSection}
-        />
-        {resultPanel}
-      </>
+      <RollOnlyScreen
+        name={vm.name}
+        formulaText={vm.formulaText}
+        autoHideRemainingMs={vm.autoHideRemainingMs}
+        onClose={vm.navigateHome}
+        rollEngineSection={rollEngineSection}
+      />
     )
   }
 
@@ -88,6 +89,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
         <FormulaScreenHeader
           isEditing={vm.isEditing}
           onBack={vm.navigateHome}
+          onProfiles={vm.navigateToProfiles}
           onDelete={vm.openDeleteDialog}
         />
 

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import MainScreen from '../../src/pages/MainScreen'
 import FormulaScreen from '../../src/pages/FormulaScreen'
 import SettingsScreen from '../../src/pages/SettingsScreen'
+import ProfileScreen from '../../src/pages/ProfileScreen'
 import { useAppStore } from '../../src/stores/useAppStore'
 
 const {
@@ -66,6 +67,7 @@ function renderApp(initialEntries: string[]) {
           { path: 'formula/:id', element: <FormulaScreen /> },
           { path: 'roll/:id', element: <FormulaScreen mode="roll-only" /> },
           { path: 'settings', element: <SettingsScreen /> },
+          { path: 'profiles', element: <ProfileScreen /> },
         ],
       },
     ],
@@ -78,6 +80,17 @@ function renderApp(initialEntries: string[]) {
 function resetStore() {
   localStorage.clear()
   useAppStore.setState({
+    profiles: {
+      default: {
+        id: 'default',
+        name: 'Default',
+        formulas: [],
+        history: [],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    },
+    activeProfileId: 'default',
     savedFormulas: [],
     rollHistory: [],
     settings: { theme: 'dark', highlightLowBattery: false },

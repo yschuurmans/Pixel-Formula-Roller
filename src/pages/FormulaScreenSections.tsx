@@ -13,9 +13,10 @@ type FormulaScreenHeaderProps = {
   isEditing: boolean
   onBack: () => void
   onDelete: () => void
+  onProfiles: () => void
 }
 
-export function FormulaScreenHeader({ isEditing, onBack, onDelete }: FormulaScreenHeaderProps) {
+export function FormulaScreenHeader({ isEditing, onBack, onDelete, onProfiles }: FormulaScreenHeaderProps) {
   return (
     <header className="mb-6 flex flex-col gap-4 border-2 border-[#8a72a8] bg-[#1a1421] p-4 shadow-[6px_6px_0_0_#0b0810] md:flex-row md:items-center md:justify-between">
       <div>
@@ -26,6 +27,13 @@ export function FormulaScreenHeader({ isEditing, onBack, onDelete }: FormulaScre
       </div>
 
       <div className="flex flex-wrap gap-3">
+        <button
+          type="button"
+          onClick={onProfiles}
+          className="border-2 border-[#ffd166] bg-[#3b2a11] px-4 py-3 text-[10px] text-[#fff0bf] shadow-[4px_4px_0_0_#120c06] transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+        >
+          Profiles
+        </button>
         <button
           type="button"
           onClick={onBack}

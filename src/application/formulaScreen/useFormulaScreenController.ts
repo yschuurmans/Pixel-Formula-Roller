@@ -11,7 +11,7 @@ import {
   stopAllGlows,
 } from '../../services/pixelsService'
 import { nativeLog } from '../../services/pixelsTransport'
-import { useAppStore } from '../../stores/useAppStore'
+import { getActiveProfileState, useAppStore } from '../../stores/useAppStore'
 import { displayDieType, createFormulaId, createRollHistoryEntry, createRollSessionId } from '../../pages/formulaHelpers'
 import {
   assignPendingBlePixelIds,
@@ -46,7 +46,8 @@ export function useFormulaScreenController(mode: FormulaScreenMode) {
   const navigate = useNavigate()
   const params = useParams<{ id: string }>()
   const locationState = location.state as FormulaScreenLocationState | null
-  const savedFormulas = useAppStore((state) => state.savedFormulas)
+  const profiles = useAppStore((state) => state.profiles)
+  const activeProfileId = useAppStore((state) => state.activeProfileId)
   const pixels = useAppStore((state) => state.pixels)
   const pairedPixels = useAppStore((state) => state.pairedPixels)
   const addRollHistory = useAppStore((state) => state.addRollHistory)
@@ -54,11 +55,16 @@ export function useFormulaScreenController(mode: FormulaScreenMode) {
   const updateSavedFormula = useAppStore((state) => state.updateSavedFormula)
   const deleteSavedFormula = useAppStore((state) => state.deleteSavedFormula)
 
+  const activeProfile = useMemo(
+    () => getActiveProfileState({ profiles, activeProfileId }),
+    [activeProfileId, profiles],
+  )
+
   const isRollOnly = mode === 'roll-only'
   const isEditing = !isRollOnly && Boolean(params.id)
   const existingFormula = useMemo(
-    () => controller.getExistingFormula(savedFormulas, params.id),
-    [controller, params.id, savedFormulas],
+    () => controller.getExistingFormula(activeProfile?.formulas ?? [], params.id),
+    [activeProfile?.formulas, controller, params.id],
   )
 
   const [name, setName] = useState('')
@@ -1178,6 +1184,7 @@ export function useFormulaScreenController(mode: FormulaScreenMode) {
     openDeleteDialog: () => setShowDeleteDialog(true),
     closeDeleteDialog: () => setShowDeleteDialog(false),
     navigateHome: () => navigate('/', { replace: true }),
+    navigateToProfiles: () => navigate('/profiles'),
     handleCountChange,
     handleKeepModeChange,
     handleKeepPreset,
