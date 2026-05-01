@@ -1,13 +1,13 @@
 import { render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import PairedDiceReconnectBridge, { resetInitialReconnectForTests } from '../PairedDiceReconnectBridge'
-import { useAppStore } from '../../stores/useAppStore'
+import PairedDiceReconnectBridge, { resetInitialReconnectForTests } from '../../src/components/PairedDiceReconnectBridge'
+import { useAppStore } from '../../src/stores/useAppStore'
 
 const { reconnectPairedDiceMock } = vi.hoisted(() => ({
   reconnectPairedDiceMock: vi.fn(),
 }))
 
-vi.mock('../../services/pixelsService', () => ({
+vi.mock('../../src/services/pixelsService', () => ({
   reconnectPairedDice: reconnectPairedDiceMock,
 }))
 

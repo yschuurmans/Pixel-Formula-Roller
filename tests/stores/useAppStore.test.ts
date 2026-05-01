@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { STORAGE_WARNING_MESSAGE, useAppStore } from '../useAppStore'
+import { STORAGE_WARNING_MESSAGE, useAppStore } from '../../src/stores/useAppStore'
 
 function baseHistoryEntry(id: string) {
   return {

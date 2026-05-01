@@ -1,8 +1,8 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import SettingsScreen from '../SettingsScreen'
-import { useAppStore } from '../../stores/useAppStore'
+import SettingsScreen from '../../src/pages/SettingsScreen'
+import { useAppStore } from '../../src/stores/useAppStore'
 
 const {
   connectRememberedDiceMock,
@@ -26,7 +26,7 @@ const {
   stopGlowMock: vi.fn(),
 }))
 
-vi.mock('../../services/pixelsService', () => ({
+vi.mock('../../src/services/pixelsService', () => ({
   connectRememberedDice: connectRememberedDiceMock,
   connectDie: connectDieMock,
   disconnectDie: disconnectDieMock,

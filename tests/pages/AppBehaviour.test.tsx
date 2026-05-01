@@ -1,10 +1,10 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createMemoryRouter, Outlet, RouterProvider, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import MainScreen from '../MainScreen'
-import FormulaScreen from '../FormulaScreen'
-import SettingsScreen from '../SettingsScreen'
-import { useAppStore } from '../../stores/useAppStore'
+import MainScreen from '../../src/pages/MainScreen'
+import FormulaScreen from '../../src/pages/FormulaScreen'
+import SettingsScreen from '../../src/pages/SettingsScreen'
+import { useAppStore } from '../../src/stores/useAppStore'
 
 const {
   mockGlowDie,
@@ -20,7 +20,7 @@ let rollCallback:
   | ((pixelId: string, face: number, dieType: string) => void)
   | undefined
 
-vi.mock('../../services/pixelsService', () => ({
+vi.mock('../../src/services/pixelsService', () => ({
   connectDie: vi.fn(async () => undefined),
   connectRememberedDice: vi.fn(async () => []),
   connectRememberedDie: vi.fn(async () => false),

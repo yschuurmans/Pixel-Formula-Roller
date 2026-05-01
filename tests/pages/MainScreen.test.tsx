@@ -1,8 +1,8 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import MainScreen from '../MainScreen'
-import { ROLL_HISTORY_STORAGE_LIMIT, STORAGE_WARNING_EVENT, type RollHistoryEntry, useAppStore } from '../../stores/useAppStore'
+import MainScreen from '../../src/pages/MainScreen'
+import { ROLL_HISTORY_STORAGE_LIMIT, STORAGE_WARNING_EVENT, type RollHistoryEntry, useAppStore } from '../../src/stores/useAppStore'
 
 const {
   connectDieMock,
@@ -14,7 +14,7 @@ const {
   glowDieMock: vi.fn(),
 }))
 
-vi.mock('../../services/pixelsService', () => ({
+vi.mock('../../src/services/pixelsService', () => ({
   connectDie: connectDieMock,
   getBleUnavailableMessage: getBleUnavailableMessageMock,
   glowDie: glowDieMock,

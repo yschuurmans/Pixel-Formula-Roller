@@ -1,30 +1,11 @@
 import { formatDistanceToNow } from 'date-fns'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
-import { connectDie, getBleUnavailableMessage, glowDie } from '../services/pixelsService'
 import {
-  ROLL_HISTORY_PREVIEW_LIMIT,
   ROLL_HISTORY_STORAGE_LIMIT,
-  STORAGE_WARNING_EVENT,
-  STORAGE_WARNING_MESSAGE,
-  type RollHistoryEntry,
-  type SavedFormula,
-  useAppStore,
 } from '../stores/useAppStore'
-import type { DieRollResult, DieType } from '../types/formula'
+import type { DieRollResult } from '../types/formula'
 import DieResultChip from '../components/DieResultChip'
-
-type ToastState = {
-  id: number
-  message: string
-}
-
-type MainScreenLocationState = {
-  mainBackGuard?: boolean
-  toastMessage?: string
-}
-
-const QUICK_CONNECT_HOLD_MS = 500
+import { displayDieType } from './formulaHelpers'
+import { useMainScreenController } from '../application/mainScreen/useMainScreenController'
 
 function ConnectIcon() {
   return (
@@ -75,169 +56,20 @@ function HistoryItem({
   )
 }
 
-function displayDieType(dieType: DieType): string {
-  return dieType === 'd100' ? 'd%' : dieType
-}
-
 function formatRollLabel(roll: DieRollResult, index: number): string {
   const baseLabel = `${displayDieType(roll.dieType)} #${index + 1}`
   return roll.kept ? `${baseLabel} result ${roll.face}` : `${baseLabel} result ${roll.face} dropped`
 }
 
 export default function MainScreen() {
-  const navigate = useNavigate()
-  const location = useLocation()
-  const locationState = location.state as MainScreenLocationState | null
-  const savedFormulas = useAppStore((state) => state.savedFormulas)
-  const rollHistory = useAppStore((state) => state.rollHistory)
-  const bleAvailable = useAppStore((state) => state.bleAvailable)
-  const bleError = useAppStore((state) => state.bleError)
-  const pixels = useAppStore((state) => state.pixels)
-  const deleteSavedFormula = useAppStore((state) => state.deleteSavedFormula)
-  const clearBleError = useAppStore((state) => state.clearBleError)
-
-  const [activeMenuId, setActiveMenuId] = useState<string | null>(null)
-  const [formulaToDelete, setFormulaToDelete] = useState<SavedFormula | null>(null)
-  const [isHistoryDialogOpen, setIsHistoryDialogOpen] = useState(false)
-  const [isQuickConnecting, setIsQuickConnecting] = useState(false)
-  const [selectedHistoryEntry, setSelectedHistoryEntry] = useState<RollHistoryEntry | null>(null)
-  const [toast, setToast] = useState<ToastState | null>(null)
-  const toastId = useRef(0)
-  const toastTimeoutRef = useRef<number | null>(null)
-  const quickConnectHoldTimer = useRef<number | null>(null)
-  const quickConnectHoldTriggered = useRef(false)
-
-  const bannerMessage = bleAvailable
-    ? null
-    : getBleUnavailableMessage() ?? 'Bluetooth is unavailable in this Android build because the native Pixels BLE bridge is not implemented yet.'
-
-  const recentHistory = useMemo(() => rollHistory.slice(0, ROLL_HISTORY_PREVIEW_LIMIT), [rollHistory])
-  const fullHistory = useMemo(() => rollHistory.slice(0, ROLL_HISTORY_STORAGE_LIMIT), [rollHistory])
-  const connectedPixelIds = useMemo(
-    () => Object.values(pixels).filter((pixel) => pixel.connectionState === 'connected').map((pixel) => pixel.pixelId),
-    [pixels],
-  )
-
-  const showToast = (message: string) => {
-    toastId.current += 1
-    const id = toastId.current
-    setToast({ id, message })
-
-    if (toastTimeoutRef.current !== null) {
-      window.clearTimeout(toastTimeoutRef.current)
-      toastTimeoutRef.current = null
-    }
-
-    toastTimeoutRef.current = window.setTimeout(() => {
-      // only clear if this is still the latest toast
-      if (toastId.current === id) {
-        setToast(null)
-      }
-      toastTimeoutRef.current = null
-    }, 10_000)
-  }
-
-  const handleQuickConnect = async () => {
-    setIsQuickConnecting(true)
-    try {
-      await connectDie()
-    } finally {
-      setIsQuickConnecting(false)
-    }
-  }
-
-  const clearQuickConnectHoldTimer = () => {
-    if (quickConnectHoldTimer.current !== null) {
-      window.clearTimeout(quickConnectHoldTimer.current)
-      quickConnectHoldTimer.current = null
-    }
-  }
-
-  const handleQuickConnectHoldStart = () => {
-    clearQuickConnectHoldTimer()
-    quickConnectHoldTriggered.current = false
-
-    if (connectedPixelIds.length === 0 || isQuickConnecting) {
-      return
-    }
-
-    quickConnectHoldTimer.current = window.setTimeout(() => {
-      quickConnectHoldTriggered.current = true
-      quickConnectHoldTimer.current = null
-      void Promise.allSettled(connectedPixelIds.map((pixelId) => glowDie(pixelId)))
-    }, QUICK_CONNECT_HOLD_MS)
-  }
-
-  const handleQuickConnectHoldEnd = () => {
-    clearQuickConnectHoldTimer()
-  }
-
-  useEffect(() => {
-    if (!bleError) {
-      return
-    }
-
-    showToast(bleError)
-    clearBleError()
-  }, [bleError, clearBleError])
-
-  useEffect(() => {
-    const handleStorageWarning = (event: Event) => {
-      const customEvent = event as CustomEvent<{ message?: string }>
-      showToast(customEvent.detail?.message ?? STORAGE_WARNING_MESSAGE)
-    }
-
-    window.addEventListener(STORAGE_WARNING_EVENT, handleStorageWarning)
-    return () => {
-      window.removeEventListener(STORAGE_WARNING_EVENT, handleStorageWarning)
-    }
-  }, [])
-
-  useEffect(() => {
-    const navigationToast = locationState?.toastMessage
-    if (!navigationToast) {
-      return
-    }
-
-    showToast(navigationToast)
-    navigate(location.pathname, {
-      replace: true,
-      state: locationState?.mainBackGuard ? { mainBackGuard: true } : null,
-    })
-  }, [location.pathname, locationState, navigate])
-
-  useEffect(() => {
-    return () => {
-      if (toastTimeoutRef.current !== null) {
-        window.clearTimeout(toastTimeoutRef.current)
-        toastTimeoutRef.current = null
-      }
-    }
-  }, [])
-
-  useEffect(() => {
-    if (location.pathname !== '/' || locationState?.mainBackGuard) {
-      return
-    }
-
-    navigate(location.pathname, {
-      state: {
-        ...(locationState ?? {}),
-        mainBackGuard: true,
-      },
-    })
-  }, [location.pathname, locationState, navigate])
-
-  useEffect(() => () => {
-    clearQuickConnectHoldTimer()
-  }, [])
+  const vm = useMainScreenController()
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,#2d2340,transparent_35%),linear-gradient(180deg,#17121d_0%,#0e0b12_100%)] px-4 py-5 text-[#f7ead4] md:px-8 md:py-8">
       <div className="mx-auto max-w-6xl">
-        {bannerMessage ? (
+        {vm.bannerMessage ? (
           <div className="mb-4 border-2 border-[#ffcc66] bg-[#362813] px-4 py-3 text-[10px] leading-relaxed text-[#ffe7b3] shadow-[4px_4px_0_0_#120c06]">
-            {bannerMessage}
+            {vm.bannerMessage}
           </div>
         ) : null}
 
@@ -250,37 +82,30 @@ export default function MainScreen() {
           <div className="flex gap-3">
             <button
               type="button"
-              onClick={() => navigate('/formula/new')}
+              onClick={vm.navigateToNewFormula}
               className="border-2 border-[#86efac] bg-[#17301f] px-4 py-3 text-[10px] text-[#d7ffe5] shadow-[4px_4px_0_0_#09130c] transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
             >
               + New
             </button>
             <button
               type="button"
-              onClick={() => {
-                if (quickConnectHoldTriggered.current) {
-                  quickConnectHoldTriggered.current = false
-                  return
-                }
-
-                void handleQuickConnect()
-              }}
-              onMouseDown={handleQuickConnectHoldStart}
-              onMouseUp={handleQuickConnectHoldEnd}
-              onMouseLeave={handleQuickConnectHoldEnd}
-              onTouchStart={handleQuickConnectHoldStart}
-              onTouchEnd={handleQuickConnectHoldEnd}
-              onTouchCancel={handleQuickConnectHoldEnd}
-              disabled={!bleAvailable || isQuickConnecting}
-              aria-label={isQuickConnecting ? 'Connecting dice' : 'Connect new die'}
-              title={bannerMessage ?? 'Connect new die'}
+              onClick={vm.handleQuickConnectClick}
+              onMouseDown={vm.handleQuickConnectHoldStart}
+              onMouseUp={vm.handleQuickConnectHoldEnd}
+              onMouseLeave={vm.handleQuickConnectHoldEnd}
+              onTouchStart={vm.handleQuickConnectHoldStart}
+              onTouchEnd={vm.handleQuickConnectHoldEnd}
+              onTouchCancel={vm.handleQuickConnectHoldEnd}
+              disabled={!vm.bleAvailable || vm.isQuickConnecting}
+              aria-label={vm.isQuickConnecting ? 'Connecting dice' : 'Connect new die'}
+              title={vm.bannerMessage ?? 'Connect new die'}
               className="flex h-[42px] w-[42px] items-center justify-center border-2 border-[#7dd3fc] bg-[#102a3a] text-[#d9f3ff] shadow-[4px_4px_0_0_#07131a] transition-transform disabled:cursor-not-allowed disabled:border-[#4b5b63] disabled:bg-[#21272a] disabled:text-[#8d9aa0] disabled:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
             >
-              {isQuickConnecting ? <SpinnerIcon /> : <ConnectIcon />}
+              {vm.isQuickConnecting ? <SpinnerIcon /> : <ConnectIcon />}
             </button>
             <button
               type="button"
-              onClick={() => navigate('/settings')}
+              onClick={vm.navigateToSettings}
               aria-label="Open settings"
               className="border-2 border-[#f8a5c2] bg-[#351826] px-4 py-3 text-[10px] text-[#ffe0ec] shadow-[4px_4px_0_0_#12070d] transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
             >
@@ -296,33 +121,33 @@ export default function MainScreen() {
               <p className="text-[9px] text-[#c5b7d8]">Tap a card to roll</p>
             </div>
 
-            {savedFormulas.length === 0 ? (
+            {vm.savedFormulas.length === 0 ? (
               <div className="border-2 border-dashed border-[#5d4a7a] bg-[#1b1522] px-4 py-8 text-center text-[10px] leading-relaxed text-[#c5b7d8]">
                 No saved formulas yet — tap + to add one
               </div>
             ) : (
               <div className="grid gap-4 md:grid-cols-2">
-                {savedFormulas.map((formula) => (
+                {vm.savedFormulas.map((formula) => (
                   <article
                     key={formula.id}
                     className="relative border-2 border-[#5d4a7a] bg-[#1b1522] p-3 shadow-[5px_5px_0_0_#09070d]"
                   >
                     <button
                       type="button"
-                      onClick={() => setActiveMenuId((current) => (current === formula.id ? null : formula.id))}
+                      onClick={() => vm.openFormulaMenu(formula.id)}
                       aria-label={`More options for ${formula.name}`}
                       className="absolute right-2 top-2 border border-[#7d6b95] bg-[#2b2136] px-2 py-1 text-xs leading-none text-[#f7ead4]"
                     >
                       ⋮
                     </button>
 
-                    {activeMenuId === formula.id ? (
+                    {vm.activeMenuId === formula.id ? (
                       <div className="absolute right-2 top-10 z-10 min-w-30 border-2 border-[#8a72a8] bg-[#110d16] shadow-[4px_4px_0_0_#09070d]">
                         <button
                           type="button"
                           onClick={() => {
-                            setActiveMenuId(null)
-                            navigate(`/formula/${formula.id}`)
+                            vm.closeFormulaMenu()
+                            vm.navigateToEditFormula(formula.id)
                           }}
                           className="block w-full border-b border-[#4d3d61] px-3 py-3 text-left text-[10px] text-[#f7ead4] hover:bg-[#241b2d]"
                         >
@@ -331,8 +156,8 @@ export default function MainScreen() {
                         <button
                           type="button"
                           onClick={() => {
-                            setActiveMenuId(null)
-                            setFormulaToDelete(formula)
+                            vm.closeFormulaMenu()
+                            vm.openDeleteDialog(formula)
                           }}
                           className="block w-full px-3 py-3 text-left text-[10px] text-[#ff9aa2] hover:bg-[#241b2d]"
                         >
@@ -344,8 +169,8 @@ export default function MainScreen() {
                     <button
                       type="button"
                       onClick={() => {
-                        setActiveMenuId(null)
-                        navigate(`/roll/${formula.id}`)
+                        vm.closeFormulaMenu()
+                        vm.navigateToRollFormula(formula.id)
                       }}
                       className="block w-full pr-8 text-left"
                     >
@@ -363,26 +188,26 @@ export default function MainScreen() {
               <h2 className="text-sm text-[#f7ead4]">Roll History</h2>
               <button
                 type="button"
-                onClick={() => setIsHistoryDialogOpen(true)}
+                onClick={vm.openHistoryDialog}
                 className="text-[9px] text-[#c5b7d8] underline underline-offset-2"
               >
                 See more
               </button>
             </div>
 
-            {recentHistory.length === 0 ? (
+            {vm.recentHistory.length === 0 ? (
               <div className="border-2 border-dashed border-[#5d4a7a] bg-[#1b1522] px-4 py-8 text-center text-[10px] text-[#c5b7d8]">
                 No rolls yet
               </div>
             ) : (
               <ol className="space-y-3">
-                {recentHistory.map((entry) => (
+                {vm.recentHistory.map((entry) => (
                   <HistoryItem
                     key={entry.id}
                     label={entry.formulaName || entry.formulaString}
                     total={entry.total}
                     rolledAt={entry.rolledAt}
-                    onClick={() => setSelectedHistoryEntry(entry)}
+                    onClick={() => vm.openHistoryEntry(entry)}
                   />
                 ))}
               </ol>
@@ -391,7 +216,7 @@ export default function MainScreen() {
         </div>
       </div>
 
-      {formulaToDelete ? (
+      {vm.formulaToDelete ? (
         <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/75 px-4">
           <div
             role="dialog"
@@ -400,23 +225,19 @@ export default function MainScreen() {
           >
             <h2 className="text-sm text-[#f7ead4]">Delete formula?</h2>
             <p className="mt-4 text-[10px] leading-relaxed text-[#d8cef1]">
-              '{formulaToDelete.name}' will be permanently removed.
+              '{vm.formulaToDelete.name}' will be permanently removed.
             </p>
             <div className="mt-6 flex justify-end gap-3">
               <button
                 type="button"
-                onClick={() => setFormulaToDelete(null)}
+                onClick={vm.closeDeleteDialog}
                 className="border-2 border-[#7d6b95] bg-[#251d2e] px-4 py-3 text-[10px] text-[#f7ead4]"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  deleteSavedFormula(formulaToDelete.id)
-                  setFormulaToDelete(null)
-                  showToast('Formula deleted')
-                }}
+                onClick={vm.deleteFormula}
                 className="border-2 border-[#ff6b6b] bg-[#4a1515] px-4 py-3 text-[10px] text-[#ffe1e1]"
               >
                 Delete
@@ -426,7 +247,7 @@ export default function MainScreen() {
         </div>
       ) : null}
 
-      {selectedHistoryEntry ? (
+      {vm.selectedHistoryEntry ? (
         <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/75 px-4">
           <div
             role="dialog"
@@ -436,12 +257,12 @@ export default function MainScreen() {
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-[10px] uppercase tracking-[0.18em] text-[#c5d7ff]">Roll Details</p>
-                <h2 className="mt-3 text-sm text-[#f7ead4]">{selectedHistoryEntry.formulaName || selectedHistoryEntry.formulaString}</h2>
+                <h2 className="mt-3 text-sm text-[#f7ead4]">{vm.selectedHistoryEntry.formulaName || vm.selectedHistoryEntry.formulaString}</h2>
               </div>
 
               <button
                 type="button"
-                onClick={() => setSelectedHistoryEntry(null)}
+                onClick={vm.closeHistoryEntry}
                 className="border-2 border-[#7d6b95] bg-[#251d2e] px-4 py-3 text-[10px] text-[#f7ead4]"
               >
                 Close
@@ -451,12 +272,12 @@ export default function MainScreen() {
             <div className="mt-5 grid gap-4 md:grid-cols-[minmax(0,1fr)_120px]">
               <div className="border-2 border-[#5d4a7a] bg-[#1b1522] p-4 shadow-[4px_4px_0_0_#09070d]">
                 <p className="text-[10px] uppercase tracking-[0.18em] text-[#c5b7d8]">Formula</p>
-                <p className="mt-3 font-mono text-[11px] text-[#d8cef1]">{selectedHistoryEntry.formulaString}</p>
+                <p className="mt-3 font-mono text-[11px] text-[#d8cef1]">{vm.selectedHistoryEntry.formulaString}</p>
               </div>
 
               <div className="border-2 border-[#ffd166] bg-[#3b2a11] p-4 text-center shadow-[4px_4px_0_0_#120c06]">
                 <p className="text-[10px] uppercase tracking-[0.18em] text-[#fff0bf]">Total</p>
-                <p className="mt-3 text-lg text-[#fff0bf]">{selectedHistoryEntry.total}</p>
+                <p className="mt-3 text-lg text-[#fff0bf]">{vm.selectedHistoryEntry.total}</p>
               </div>
             </div>
 
@@ -464,12 +285,12 @@ export default function MainScreen() {
               <div className="flex items-center justify-between gap-3">
                 <h3 className="text-[10px] uppercase tracking-[0.18em] text-[#c5b7d8]">Dice Results</h3>
                 <p className="text-[9px] text-[#c5b7d8]">
-                  {formatDistanceToNow(selectedHistoryEntry.rolledAt, { addSuffix: true })}
+                  {formatDistanceToNow(vm.selectedHistoryEntry.rolledAt, { addSuffix: true })}
                 </p>
               </div>
 
               <div className="mt-4 flex flex-wrap gap-3">
-                {selectedHistoryEntry.result.groups.flatMap((group) =>
+                {vm.selectedHistoryEntry.result.groups.flatMap((group) =>
                   group.rolls.map((roll, index) => (
                     <DieResultChip
                       key={`roll-${group.dieType}-${index}-${roll.face}`}
@@ -481,9 +302,9 @@ export default function MainScreen() {
                   )),
                 )}
 
-                {selectedHistoryEntry.result.flatModifier !== 0 ? (
+                {vm.selectedHistoryEntry.result.flatModifier !== 0 ? (
                   <div className="basis-full border-t border-[#4d3d61] pt-4 text-[10px] text-[#c5b7d8]">
-                    Flat modifier: {selectedHistoryEntry.result.flatModifier > 0 ? `+${selectedHistoryEntry.result.flatModifier}` : selectedHistoryEntry.result.flatModifier}
+                    Flat modifier: {vm.selectedHistoryEntry.result.flatModifier > 0 ? `+${vm.selectedHistoryEntry.result.flatModifier}` : vm.selectedHistoryEntry.result.flatModifier}
                   </div>
                 ) : null}
               </div>
@@ -492,7 +313,7 @@ export default function MainScreen() {
         </div>
       ) : null}
 
-      {isHistoryDialogOpen ? (
+      {vm.isHistoryDialogOpen ? (
         <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/75 px-4">
           <div
             role="dialog"
@@ -507,28 +328,28 @@ export default function MainScreen() {
 
               <button
                 type="button"
-                onClick={() => setIsHistoryDialogOpen(false)}
+                onClick={vm.closeHistoryDialog}
                 className="border-2 border-[#7d6b95] bg-[#251d2e] px-4 py-3 text-[10px] text-[#f7ead4]"
               >
                 Close
               </button>
             </div>
 
-            {fullHistory.length === 0 ? (
+            {vm.fullHistory.length === 0 ? (
               <div className="mt-5 border-2 border-dashed border-[#5d4a7a] bg-[#1b1522] px-4 py-8 text-center text-[10px] text-[#c5b7d8]">
                 No rolls yet
               </div>
             ) : (
               <ol className="mt-5 max-h-[70vh] space-y-3 overflow-y-auto pr-1">
-                {fullHistory.map((entry) => (
+                {vm.fullHistory.map((entry) => (
                   <HistoryItem
                     key={entry.id}
                     label={entry.formulaName || entry.formulaString}
                     total={entry.total}
                     rolledAt={entry.rolledAt}
                     onClick={() => {
-                      setIsHistoryDialogOpen(false)
-                      setSelectedHistoryEntry(entry)
+                      vm.closeHistoryDialog()
+                      vm.openHistoryEntry(entry)
                     }}
                   />
                 ))}
@@ -538,9 +359,9 @@ export default function MainScreen() {
         </div>
       ) : null}
 
-      {toast ? (
+      {vm.toast ? (
         <div className="fixed bottom-4 right-4 z-30 max-w-sm border-2 border-[#ffd166] bg-[#3a2a10] px-4 py-3 text-[10px] leading-relaxed text-[#fff0bf] shadow-[6px_6px_0_0_#120c06]">
-          {toast.message}
+          {vm.toast.message}
         </div>
       ) : null}
     </main>

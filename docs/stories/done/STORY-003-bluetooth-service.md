@@ -80,4 +80,4 @@ Map any Android/native Pixels `d00` value to `"d100"` here at the BLE boundary. 
 ## Validation Notes
 - Native Android BLE discovery and connection were verified on a physical Android device.
 - Transport debugging covered permission flow, scan filtering, GATT service selection, Android 13+ notification callbacks, and MTU negotiation.
-- Focused regression coverage exists in `src/services/__tests__/pixelsService.test.ts`.
+- Focused regression coverage exists in `tests/services/pixelsService.test.ts`.

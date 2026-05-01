@@ -1,292 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import {
-  connectRememberedDice,
-  connectDie,
-  disconnectDie,
-  forgetDie,
-  getBleUnavailableMessage,
-  glowDie,
-  glowCleanupOrientation,
-  reconnectPairedDice,
-  stopGlow,
-  startBatteryHighlightCycle,
-  stopBatteryHighlightCycle,
-} from '../services/pixelsService'
 import DieIcon from '../components/DieIcon'
-import type { DieType } from '../types/formula'
-import { useAppStore } from '../stores/useAppStore'
-
-const CLEANUP_DIE_ORDER: DieType[] = ['d4', 'd6', 'd8', 'd10', 'd12', 'd20', 'd100']
-const CLEANUP_RECONNECT_INTERVAL_MS = 2_000
-const CLEANUP_GLOW_INTERVAL_MS = 5_000
-const CLEANUP_BASE_GLOW = { r: 40, g: 40, b: 40 } as const
-// Explicit, semantic names: TOP should be green, BOTTOM should be red.
-const CLEANUP_TOP_FACE_GLOW = { r: 34, g: 255, b: 94 } as const
-const CLEANUP_BOTTOM_FACE_GLOW = { r: 255, g: 68, b: 68 } as const
-
-function displayDieType(dieType: DieType): string {
-  return dieType === 'd100' ? 'd%' : dieType
-}
-
-function connectionStatusLabel(connectionState: 'connected' | 'disconnected'): string {
-  return connectionState === 'connected' ? 'Connected' : 'Disconnected'
-}
+import { displayDieType } from './formulaHelpers'
+import { useSettingsScreenController } from '../application/settingsScreen/useSettingsScreenController'
+import { CLEANUP_DIE_ORDER, connectionStatusLabel } from '../application/settingsScreen/SettingsScreenController'
 
 export default function SettingsScreen() {
-  const navigate = useNavigate()
-  const pixels = useAppStore((state) => state.pixels)
-  const pairedPixelIds = useAppStore((state) => state.pairedPixelIds)
-  const pairedPixels = useAppStore((state) => state.pairedPixels)
-  const bleAvailable = useAppStore((state) => state.bleAvailable)
-  const bleError = useAppStore((state) => state.bleError)
-  const clearBleError = useAppStore((state) => state.clearBleError)
-
-  const [isConnecting, setIsConnecting] = useState(false)
-  const [isFlashingAll, setIsFlashingAll] = useState(false)
-  const [isReconnecting, setIsReconnecting] = useState(false)
-  const [activeCleanupDieType, setActiveCleanupDieType] = useState<DieType | null>(null)
-  const [toast, setToast] = useState<string | null>(null)
-  const toastTimeoutRef = useRef<number | null>(null)
-  const latestPixelsRef = useRef(pixels)
-  const latestPairedPixelsRef = useRef(pairedPixels)
-  const previousCleanupDieTypeRef = useRef<DieType | null>(null)
-
-  const pixelEntries = useMemo(
-    () =>
-      Object.values(pixels).sort((left, right) => {
-        if (left.connectionState !== right.connectionState) {
-          return left.connectionState === 'connected' ? -1 : 1
-        }
-
-        return left.pixelId.localeCompare(right.pixelId)
-      }),
-    [pixels],
-  )
-
-  const bleUnavailableMessage = bleAvailable
-    ? null
-    : getBleUnavailableMessage() ?? 'Bluetooth is unavailable in this Android build because the native Pixels BLE bridge is not implemented yet.'
-
-  const reconnectDisabledReason = !bleAvailable
-    ? bleUnavailableMessage
-    : pairedPixelIds.length === 0
-      ? 'Connect a die once to enable reconnect.'
-      : undefined
-
-  const connectedPixelIds = useMemo(
-    () => pixelEntries.filter((pixel) => pixel.connectionState === 'connected').map((pixel) => pixel.pixelId),
-    [pixelEntries],
-  )
-  const cleanupConnectedPixelIds = useMemo(
-    () =>
-      activeCleanupDieType === null
-        ? []
-        : pixelEntries
-            .filter((pixel) => pixel.connectionState === 'connected' && pixel.dieType === activeCleanupDieType)
-            .map((pixel) => pixel.pixelId),
-    [activeCleanupDieType, pixelEntries],
-  )
-
-  useEffect(() => {
-    latestPixelsRef.current = pixels
-  }, [pixels])
-
-  useEffect(() => {
-    latestPairedPixelsRef.current = pairedPixels
-  }, [pairedPixels])
-
-  useEffect(() => {
-    if (!bleError) {
-      return
-    }
-
-    setToast(bleError)
-    clearBleError()
-
-    if (toastTimeoutRef.current !== null) {
-      window.clearTimeout(toastTimeoutRef.current)
-      toastTimeoutRef.current = null
-    }
-
-    toastTimeoutRef.current = window.setTimeout(() => setToast(null), 10_000)
-  }, [bleError, clearBleError])
-
-  useEffect(() => {
-    return () => {
-      if (toastTimeoutRef.current !== null) {
-        window.clearTimeout(toastTimeoutRef.current)
-        toastTimeoutRef.current = null
-      }
-    }
-  }, [])
-
-  const settings = useAppStore((state) => state.settings)
-  const setSettings = useAppStore((state) => state.setSettings)
-
-  const handleToggleHighlight = (enabled: boolean) => {
-    setSettings({ ...settings, highlightLowBattery: enabled })
-
-    // Turn off any active cleanup when starting highlighting so they cannot
-    // both run at the same time.
-    if (enabled) {
-      setActiveCleanupDieType(null)
-    }
-
-    if (enabled) {
-      if (!pairedPixelIds || pairedPixelIds.length === 0) {
-        setToast('No paired dice to highlight.')
-        if (toastTimeoutRef.current !== null) {
-          window.clearTimeout(toastTimeoutRef.current)
-          toastTimeoutRef.current = null
-        }
-
-        toastTimeoutRef.current = window.setTimeout(() => setToast(null), 6_000)
-        return
-      }
-
-      startBatteryHighlightCycle()
-    } else {
-      stopBatteryHighlightCycle()
-    }
-  }
-
-  const stopCleanupGlowForType = async (dieType: DieType) => {
-    const pixelIds = Object.values(latestPixelsRef.current)
-      .filter((pixel) => pixel.connectionState === 'connected' && pixel.dieType === dieType)
-      .map((pixel) => pixel.pixelId)
-
-    await Promise.allSettled(pixelIds.map((pixelId) => stopGlow(pixelId)))
-  }
-
-  useEffect(() => {
-    const previousDieType = previousCleanupDieTypeRef.current
-
-    if (previousDieType !== null && previousDieType !== activeCleanupDieType) {
-      void stopCleanupGlowForType(previousDieType)
-    }
-
-    previousCleanupDieTypeRef.current = activeCleanupDieType
-  }, [activeCleanupDieType])
-
-  useEffect(() => {
-    return () => {
-      if (previousCleanupDieTypeRef.current !== null) {
-        void stopCleanupGlowForType(previousCleanupDieTypeRef.current)
-      }
-    }
-  }, [])
-
-  const handleConnect = async () => {
-    setIsConnecting(true)
-    try {
-      await connectDie()
-    } finally {
-      setIsConnecting(false)
-    }
-  }
-
-  const handleReconnect = async () => {
-    setIsReconnecting(true)
-    try {
-      await reconnectPairedDice({ allowPromptFallback: true })
-    } finally {
-      setIsReconnecting(false)
-    }
-  }
-
-  const handleFlashDie = async (pixelId: string) => {
-    await glowDie(pixelId)
-  }
-
-  const handleFlashAllDice = async () => {
-    setIsFlashingAll(true)
-    try {
-      await Promise.all(connectedPixelIds.map((pixelId) => glowDie(pixelId)))
-    } finally {
-      setIsFlashingAll(false)
-    }
-  }
-
-  const glowCleanupFacesForPixel = async (pixelId: string) => {
-    await glowCleanupOrientation(pixelId, {
-      baseColor: CLEANUP_BASE_GLOW,
-      // Service expects lowFaceColor/highFaceColor; map semantic top/bottom
-      // into those parameters so top is green and bottom is red.
-      lowFaceColor: CLEANUP_BOTTOM_FACE_GLOW,
-      highFaceColor: CLEANUP_TOP_FACE_GLOW,
-    })
-  }
-
-  useEffect(() => {
-    if (activeCleanupDieType === null) {
-      return
-    }
-
-    let cancelled = false
-
-    const reconnectCleanupDice = async () => {
-      const rememberedPixelIds = Object.values(latestPairedPixelsRef.current)
-        .filter((pixel) => pixel.dieType === activeCleanupDieType)
-        .map((pixel) => pixel.pixelId)
-      const connectedIds = Object.values(latestPixelsRef.current)
-        .filter((pixel) => pixel.connectionState === 'connected' && pixel.dieType === activeCleanupDieType)
-        .map((pixel) => pixel.pixelId)
-      const missingPixelIds = rememberedPixelIds.filter((pixelId) => !connectedIds.includes(pixelId))
-
-      if (missingPixelIds.length === 0 || cancelled) {
-        return
-      }
-
-      await connectRememberedDice(missingPixelIds, {
-        suppressErrors: true,
-        continueOnError: true,
-      }, 'cleanup-reconnect')
-    }
-
-    const glowCleanupDice = async () => {
-      const connectedPixels = Object.values(latestPixelsRef.current)
-        .filter((pixel) => pixel.connectionState === 'connected' && pixel.dieType === activeCleanupDieType)
-
-      if (connectedPixels.length === 0 || cancelled) {
-        return
-      }
-
-      await Promise.allSettled(
-        connectedPixels.map((pixel) => glowCleanupFacesForPixel(pixel.pixelId)),
-      )
-    }
-
-    void reconnectCleanupDice()
-    void glowCleanupDice()
-
-    const reconnectIntervalId = window.setInterval(() => {
-      void reconnectCleanupDice()
-    }, CLEANUP_RECONNECT_INTERVAL_MS)
-    const glowIntervalId = window.setInterval(() => {
-      void glowCleanupDice()
-    }, CLEANUP_GLOW_INTERVAL_MS)
-
-    return () => {
-      cancelled = true
-      window.clearInterval(reconnectIntervalId)
-      window.clearInterval(glowIntervalId)
-    }
-  }, [activeCleanupDieType])
-
-  useEffect(() => {
-    if (activeCleanupDieType === null || cleanupConnectedPixelIds.length === 0) {
-      return
-    }
-
-    const connectedPixels = pixelEntries.filter(
-      (pixel) => pixel.connectionState === 'connected' && pixel.dieType === activeCleanupDieType,
-    )
-
-    void Promise.allSettled(
-      connectedPixels.map((pixel) => glowCleanupFacesForPixel(pixel.pixelId)),
-    )
-  }, [activeCleanupDieType, cleanupConnectedPixelIds, pixelEntries])
+  const vm = useSettingsScreenController()
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,#2d2340,transparent_35%),linear-gradient(180deg,#17121d_0%,#0e0b12_100%)] px-4 py-5 text-[#f7ead4] md:px-8 md:py-8">
@@ -299,7 +17,7 @@ export default function SettingsScreen() {
 
           <button
             type="button"
-            onClick={() => navigate('/', { replace: true })}
+            onClick={vm.navigateHome}
             className="border-2 border-[#7d6b95] bg-[#251d2e] px-4 py-3 text-[10px] text-[#f7ead4] shadow-[4px_4px_0_0_#09070d] transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
           >
             ← Back
@@ -319,47 +37,47 @@ export default function SettingsScreen() {
               <div className="flex flex-col gap-3 md:items-end">
                 <button
                   type="button"
-                  onClick={handleConnect}
-                  disabled={!bleAvailable || isConnecting}
-                  title={bleUnavailableMessage ?? undefined}
+                  onClick={() => void vm.handleConnect()}
+                  disabled={!vm.bleAvailable || vm.isConnecting}
+                  title={vm.bleUnavailableMessage ?? undefined}
                   className="border-2 border-[#86efac] bg-[#17301f] px-4 py-3 text-[10px] text-[#d7ffe5] shadow-[4px_4px_0_0_#09130c] transition-transform disabled:cursor-not-allowed disabled:border-[#4d5b52] disabled:bg-[#202721] disabled:text-[#8ba091] disabled:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
                 >
-                  {isConnecting ? 'Connecting…' : 'Connect new die'}
+                  {vm.isConnecting ? 'Connecting…' : 'Connect new die'}
                 </button>
                 <button
                   type="button"
-                  onClick={handleReconnect}
-                  disabled={!bleAvailable || isReconnecting || pairedPixelIds.length === 0}
-                  title={reconnectDisabledReason ?? undefined}
+                  onClick={() => void vm.handleReconnect()}
+                  disabled={!vm.bleAvailable || vm.isReconnecting || vm.pairedPixelIds.length === 0}
+                  title={vm.reconnectDisabledReason ?? undefined}
                   className="border-2 border-[#7dd3fc] bg-[#102a3a] px-4 py-3 text-[10px] text-[#d9f3ff] shadow-[4px_4px_0_0_#07131a] transition-transform disabled:cursor-not-allowed disabled:border-[#4b5b63] disabled:bg-[#21272a] disabled:text-[#8d9aa0] disabled:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
                 >
-                  {isReconnecting ? 'Reconnecting…' : 'Reconnect paired dice'}
+                  {vm.isReconnecting ? 'Reconnecting…' : 'Reconnect paired dice'}
                 </button>
                 <button
                   type="button"
-                  onClick={() => void handleFlashAllDice()}
-                  disabled={connectedPixelIds.length === 0 || isFlashingAll}
-                  title={connectedPixelIds.length === 0 ? 'Connect a die to flash it.' : undefined}
+                  onClick={() => void vm.handleFlashAllDice()}
+                  disabled={vm.connectedPixelIds.length === 0 || vm.isFlashingAll}
+                  title={vm.connectedPixelIds.length === 0 ? 'Connect a die to flash it.' : undefined}
                   className="border-2 border-[#ffd166] bg-[#3b2a11] px-4 py-3 text-[10px] text-[#fff0bf] shadow-[4px_4px_0_0_#120c06] transition-transform disabled:cursor-not-allowed disabled:border-[#61563b] disabled:bg-[#272319] disabled:text-[#a89b76] disabled:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
                 >
-                  {isFlashingAll ? 'Flashing…' : 'Flash all dice'}
+                  {vm.isFlashingAll ? 'Flashing…' : 'Flash all dice'}
                 </button>
               </div>
             </div>
 
-            {!bleAvailable && bleUnavailableMessage ? (
+            {!vm.bleAvailable && vm.bleUnavailableMessage ? (
               <div className="mb-4 border-2 border-[#ffcc66] bg-[#362813] px-4 py-3 text-[10px] leading-relaxed text-[#ffe7b3] shadow-[4px_4px_0_0_#120c06]">
-                {bleUnavailableMessage}
+                {vm.bleUnavailableMessage}
               </div>
             ) : null}
 
-            {pixelEntries.length === 0 ? (
+            {vm.pixelEntries.length === 0 ? (
               <div className="border-2 border-dashed border-[#5d4a7a] bg-[#1b1522] px-4 py-8 text-center text-[10px] leading-relaxed text-[#c5b7d8]">
                 No dice connected — tap 'Connect new die' to get started
               </div>
             ) : (
               <ul className="space-y-3">
-                {pixelEntries.map((pixel) => (
+                {vm.pixelEntries.map((pixel) => (
                   <li
                     key={pixel.pixelId}
                     className="relative flex flex-col gap-4 border-2 border-[#5d4a7a] bg-[#1b1522] p-3 shadow-[5px_5px_0_0_#09070d] md:flex-row md:items-center md:justify-between"
@@ -376,7 +94,7 @@ export default function SettingsScreen() {
                     <div className="flex items-start gap-3">
                       <button
                         type="button"
-                        onClick={() => void handleFlashDie(pixel.pixelId)}
+                        onClick={() => void vm.handleFlashDie(pixel.pixelId)}
                         disabled={pixel.connectionState !== 'connected'}
                         aria-label={`Flash Pixel ${pixel.pixelId.slice(-4)}`}
                         title={pixel.connectionState === 'connected' ? 'Flash die' : 'Connect the die to flash it.'}
@@ -400,7 +118,7 @@ export default function SettingsScreen() {
                     <div className="flex flex-wrap items-center justify-end gap-3 md:max-w-[16rem]">
                       <button
                         type="button"
-                        onClick={() => disconnectDie(pixel.pixelId)}
+                        onClick={() => vm.handleDisconnectDie(pixel.pixelId)}
                         disabled={pixel.connectionState !== 'connected'}
                         className="border-2 border-[#fda4af] bg-[#35181f] px-4 py-3 text-[10px] text-[#ffe3e6] disabled:cursor-not-allowed disabled:border-[#5b494e] disabled:bg-[#272022] disabled:text-[#9a878c]"
                       >
@@ -408,7 +126,7 @@ export default function SettingsScreen() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => void forgetDie(pixel.pixelId)}
+                        onClick={() => vm.handleForgetDie(pixel.pixelId)}
                         className="border-2 border-[#ff8f66] bg-[#3c1d10] px-4 py-3 text-[10px] text-[#ffe2d6]"
                       >
                         Forget
@@ -429,23 +147,23 @@ export default function SettingsScreen() {
 
               <div className="mt-4 flex items-center justify-between">
                 <label className="flex items-center gap-3 text-[10px] text-[#f7ead4]">
-                  <span>{settings.highlightLowBattery ? 'On' : 'Off'}</span>
+                  <span>{vm.settings.highlightLowBattery ? 'On' : 'Off'}</span>
                   <input
                     type="checkbox"
                     role="switch"
                     aria-label="Highlight low battery dice"
-                    checked={!!settings.highlightLowBattery}
-                    onChange={(e) => handleToggleHighlight(e.target.checked)}
+                    checked={!!vm.settings.highlightLowBattery}
+                    onChange={(e) => vm.handleToggleHighlight(e.target.checked)}
                     className="h-5 w-5 accent-[#86efac]"
                   />
                 </label>
 
-                {settings.highlightLowBattery ? (
+                {vm.settings.highlightLowBattery ? (
                   <div className="text-[10px] text-[#c5b7d8]">
-                    Highlighting: {pairedPixelIds.length} dice — running
+                    Highlighting: {vm.pairedPixelIds.length} dice — running
                     <button
                       type="button"
-                      onClick={() => handleToggleHighlight(false)}
+                      onClick={() => vm.handleToggleHighlight(false)}
                       className="ml-2 border-2 border-[#ff8f66] bg-[#3c1d10] px-2 py-1 text-[10px] text-[#ffe2d6]"
                     >
                       Stop
@@ -468,11 +186,9 @@ export default function SettingsScreen() {
               ) : (
                 <ul className="mt-4 space-y-3">
                   {CLEANUP_DIE_ORDER.map((dieType) => {
-                    const isActive = activeCleanupDieType === dieType
-                    const connectedCount = pixelEntries.filter(
-                      (pixel) => pixel.connectionState === 'connected' && pixel.dieType === dieType,
-                    ).length
-                    const rememberedCount = Object.values(pairedPixels).filter((pixel) => pixel.dieType === dieType).length
+                    const isActive = vm.activeCleanupDieType === dieType
+                    const connectedCount = vm.getConnectedCountForDieType(dieType)
+                    const rememberedCount = vm.getRememberedCountForDieType(dieType)
 
                     return (
                       <li
@@ -496,17 +212,8 @@ export default function SettingsScreen() {
                             role="switch"
                             aria-label={`${displayDieType(dieType)} cleanup`}
                             checked={isActive}
-                            disabled={!!settings.highlightLowBattery}
-                            onChange={() => {
-                              const next = activeCleanupDieType === dieType ? null : dieType
-                              // If enabling cleanup while battery highlighting is on,
-                              // turn highlighting off first.
-                              if (next !== null && settings.highlightLowBattery) {
-                                handleToggleHighlight(false)
-                              }
-
-                              setActiveCleanupDieType(next)
-                            }}
+                            disabled={!!vm.settings.highlightLowBattery}
+                            onChange={() => vm.handleCleanupToggle(dieType)}
                             className="h-5 w-5 accent-[#86efac]"
                           />
                         </label>
@@ -520,9 +227,9 @@ export default function SettingsScreen() {
         </div>
       </div>
 
-      {toast ? (
+      {vm.toast ? (
         <div className="fixed bottom-4 right-4 z-30 max-w-sm border-2 border-[#ffd166] bg-[#3a2a10] px-4 py-3 text-[10px] leading-relaxed text-[#fff0bf] shadow-[6px_6px_0_0_#120c06]">
-          {toast}
+          {vm.toast}
         </div>
       ) : null}
     </main>

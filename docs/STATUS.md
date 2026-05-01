@@ -37,10 +37,6 @@ src/
     pixelsService.ts        ✅ Native Android BLE connect/disconnect, reconnect,
                                roll subscriptions, battery, glow
     pixelsTransport.ts      ✅ Capacitor-native Pixels transport/session bridge
-    __tests__/
-      formulaParserSmoke.test.ts   ✅ 1 test (rpg-dice-roller smoke)
-      formulaParser.test.ts        ✅ Parser coverage
-      pixelsService.test.ts        ✅ BLE service coverage
   stores/useAppStore.ts     ✅ Zustand store with BLE state + quota-safe persist
   pages/
     MainScreen.tsx          ✅ Implemented
@@ -48,10 +44,15 @@ src/
     SettingsScreen.tsx      ✅ Hardware verification UI implemented
   main.tsx                  ✅ Routes wired
   index.css                 ✅ Tailwind + retro base styling
+tests/
+  services/                 ✅ Service-level Vitest coverage
+  pages/                    ✅ Screen-level Vitest coverage
+  components/               ✅ Bridge/component Vitest coverage
+  stores/                   ✅ Store/persistence Vitest coverage
 ```
 
 **Focused validations completed**:
-- `npm test -- src/services/__tests__/pixelsService.test.ts src/pages/__tests__/SettingsScreen.test.tsx`
+- `npm test -- tests/services/pixelsService.test.ts tests/pages/SettingsScreen.test.tsx`
 - `npm run build`
 - `android/.\gradlew.bat app:installDebug`
 
