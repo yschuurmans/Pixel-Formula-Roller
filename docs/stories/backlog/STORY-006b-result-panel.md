@@ -1,6 +1,6 @@
 # STORY-006b: Result Panel — Display, History, Roll Again
 
-Status Update: Partially done — core evaluation and [Roll Again] behavior implemented in the roll engine; UI polish, accessibility, and a11y-focused acceptance items remain pending (see "Remaining work" below).
+Status Update: Complete — the result panel is wired into FormulaScreen, the overlay/modal behavior is implemented, and the completed-roll flow is covered by tests.
 
 ## Goal
 Display the roll result after the engine (STORY-006a) evaluates the formula, handle Roll Again, and write to roll history.
@@ -42,7 +42,7 @@ Display the roll result after the engine (STORY-006a) evaluates the formula, han
 ```
 
 ### Local storage quota
-- **Status:** Not implemented/tested — storage-quota fallback handling remains pending and should be covered during QA.
+- **Status:** Implemented and covered by store tests.
 
 ## Notes
 - Depends on STORY-006a (consumes EvaluationResult), STORY-001.

@@ -18,6 +18,22 @@ High-level principles
   - Application: `src/application` — pure application logic, use-cases, builders, transformations, and evaluation helpers.
   - Infrastructure: `src/services`, `src/stores`, `src/transports` — BLE, persistence, network, and platform adapters.
 
+Screen architecture rules (mandatory)
+------------------------------------
+- Screens in `src/pages` must remain thin composition shells. They may read a view-model hook and render JSX, but they should not accumulate business rules, reconnect loops, timer orchestration, or service-heavy workflows.
+- For any non-trivial screen, use this structure:
+  - `src/application/<screen>/<Screen>Controller.ts` for synchronous derivations, state transitions, and policy decisions.
+  - `src/application/<screen>/use<Screen>Controller.ts` for React-side orchestration: router integration, store selection, effects, timers, refs, and service calls.
+  - `src/pages/<Screen>.tsx` for rendering and event-to-view-model wiring only.
+- If a screen grows beyond basic rendering and event forwarding, stop adding logic to the page and extract the behavior before continuing.
+- Do not move business logic into presentational subcomponents just to shrink a page file. Presentational sections may format data and emit callbacks, but screen behavior belongs in the application layer.
+
+Type ownership rules
+--------------------
+- Reuse canonical types from the owning layer. Do not create ad hoc duplicates of store, service, or application-layer shapes inside pages or controllers.
+- If a helper or service already consumes a repository type such as `RememberedPixelEntry`, import that exact type instead of recreating a structurally similar local type.
+- Shared UI-only types can live near the application controller for that screen if they represent view-model data, but domain and persistence types stay in their owning modules.
+
 File and function sizing rules
 -----------------------------
 - Functions should generally be under 100 lines. If a function grows beyond 100 lines, split it into clearly named helpers.
@@ -29,10 +45,20 @@ Refactor workflow (mandatory)
 1. Run the full test suite: `npm test`.
    - If tests fail, stop and report; do not refactor until the baseline is green.
 2. Create a short TODO plan for the work (track progress). In this environment, use the `manage_todo_list` tool; in other environments add a `TODO` or issue.
-3. Implement minimal changes to fix the root cause — avoid extensive, speculative rewrites.
-4. Run unit tests and `tsc -b` frequently while editing.
-5. When done, run the full test suite again and confirm all tests are passing.
-6. Run build: `npm run build`. For Android deploys run the repository's scripts (e.g., `scripts/android-phone-deploy.ps1` or `npx cap sync android`).
+3. Refactor one screen or one local behavior slice at a time. Do not rewrite multiple screens in one unvalidated step.
+4. Implement minimal changes to fix the root cause — avoid extensive, speculative rewrites.
+5. After the first substantive edit, run the narrowest affected tests immediately.
+6. Run `tsc -b` or `npm run build` during screen refactors, not only at the end. Targeted tests can miss cross-layer type mismatches.
+7. When done, run the full relevant page suite again and confirm all tests are passing.
+8. Run build: `npm run build`. For Android-facing changes, run the repository's deploy script or Android task before considering the work complete.
+
+Screen refactor sequence (must-follow)
+-------------------------------------
+1. Extract or centralize pure helpers first.
+2. Extract presentational sections second, if needed.
+3. Extract screen behavior into `use<Screen>Controller` and `<Screen>Controller` third.
+4. Validate after each step before starting the next one.
+5. Only after the controller/view-model boundary is stable should you do adjacent cleanup or deduplication.
 
 Tooling & communication rules (for interactive/code-gen assistants)
 ------------------------------------------------------------------
@@ -46,11 +72,13 @@ TypeScript & JSX rules
 - Keep `tsconfig` strict settings passing: remove unused imports and duplicate types.
 - Files that contain JSX must use the `.tsx` extension.
 - Centralize shared types in `src/types/*`.
+- Do not leave stale page-local state, handlers, or imports behind after moving logic into a controller hook; the page should compile cleanly as a shell.
 
 Testing & logging
 -----------------
 - Tests are the source of truth: do not modify tests to suit generated code without human review.
 - Avoid adding noisy, unconditional console logs in code that tests exercise. If debug logs are needed, gate them behind a debug flag or logger.
+- For screen architecture work, validate in this order: focused screen tests, broader page tests, then `npm run build`, then Android deploy if the change can affect runtime packaging or integration.
 
 Comments & naming
 -----------------
@@ -64,11 +92,14 @@ Code organization guidance
   - `src/application/<feature>/*` (application): pure helpers, builders, and evaluation functions.
   - `src/services/<feature>/*` (infrastructure): platform/adapter code, native bridges.
 - Keep naming predictable: `*Helpers.ts`, `*Service.ts`, `*Transport.ts`, `*Store.ts`.
+- For screens specifically, prefer the naming pair `use<Screen>Controller.ts` and `<Screen>Controller.ts` over ad hoc hook names when the screen owns substantial behavior.
 
 Examples (must-follow patterns)
 ------------------------------
 - Move heavy pure logic from pages into `src/application/*`.
 - Keep BLE mapping and device-specific conversions inside `src/services`/`src/transports`.
+- Keep timers, reconnect cycles, toast lifecycles, and route/state orchestration out of `src/pages/*` once they exceed trivial inline behavior.
+- If a page ends up mostly destructuring a `vm` object and rendering sections, that is the intended shape, not a smell.
 
 Pre-merge checklist
 -------------------

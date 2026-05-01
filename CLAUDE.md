@@ -114,6 +114,10 @@ For hardware-first verification, STORY-007 is intentionally pulled ahead of STOR
 - Run dev server and test the golden path before marking a story done.
 - TypeScript strict mode throughout.
 - When picking up after a break: read CLAUDE.md, then the current in-progress story file.
+- Keep `src/pages` thin. If a screen starts accumulating timers, reconnect logic, toast lifecycles, navigation guards, or service orchestration, move that behavior into `src/application/<screen>/use<Screen>Controller.ts` and `src/application/<screen>/<Screen>Controller.ts`.
+- Prefer the pattern now used by the three main screens: page shell in `src/pages`, synchronous screen policy in `<Screen>Controller`, and React/store/router orchestration in `use<Screen>Controller`.
+- Reuse canonical repository types from the owning modules instead of recreating local lookalike types. This is especially important at page/application/store boundaries.
+- Validate screen refactors incrementally: focused page tests first, then the broader page suite, then `npm run build`, and for Android-sensitive work run the phone deploy task.
 
 ## Commands
 

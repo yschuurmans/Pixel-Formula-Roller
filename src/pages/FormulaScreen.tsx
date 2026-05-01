@@ -15,6 +15,7 @@ import { useAppStore } from '../stores/useAppStore'
 import type { DieType, EvaluationResult, ParsedFormula } from '../types/formula'
 import DieIcon from '../components/DieIcon'
 import DieResultChip from '../components/DieResultChip'
+import ResultPanel from '../components/ResultPanel'
 import {
   displayDieType,
   getManualEntryConfig,
@@ -125,6 +126,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
   const [isReady, setIsReady] = useState(false)
   const [navigationIntent, setNavigationIntent] = useState<NavigationIntent | null>(null)
   const [rollSession, setRollSession] = useState<RollSession | null>(null)
+  const [isResultPanelOpen, setIsResultPanelOpen] = useState(false)
   const [manualInputs, setManualInputs] = useState<Record<string, string>>({})
   const initialSnapshotRef = useRef<SnapshotState>({ name: '', formulaText: '' })
   const skipBlockRef = useRef(false)
@@ -179,22 +181,14 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
   const [autoHideRemainingMs, setAutoHideRemainingMs] = useState<number | null>(null)
   const [rollOnlyAutoHideExpired, setRollOnlyAutoHideExpired] = useState(false)
 
-  // Keep a mutable ref in sync with `rollSession` so callbacks/intervals
-  // that close over the ref can read the latest session without
-  // re-subscribing.
   useEffect(() => {
     rollSessionRef.current = rollSession
   }, [rollSession])
 
-  // Mirror `glowPauseUntil` into a ref so async handlers and intervals
-  // can check the current pause window without additional subscriptions.
   useEffect(() => {
     glowPauseUntilRef.current = glowPauseUntil
   }, [glowPauseUntil])
 
-  // Initialize or restore the builder/roll state when the component
-  // mounts or when route params / mode change. Handles roll-only,
-  // editing, and new-formula initialization paths.
   useEffect(() => {
     if (isRollOnly) {
       if (!existingFormula) {
@@ -462,6 +456,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
       statusMessage: null,
       historyRecorded: true,
     })
+    setIsResultPanelOpen(true)
   }, [addRollHistory, clearPendingGlowPrompt, name])
 
   const scrollRollEngineIntoView = useCallback(() => {
@@ -626,6 +621,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     // the `FORMULA_ROLL_TRANSITION_DELAY_MS` window so only the immediate
     // glow is observed.
     suppressScheduledUntilRef.current = Date.now() + FORMULA_ROLL_TRANSITION_DELAY_MS
+    setIsResultPanelOpen(false)
     setRollSession(nextSession)
     markAssignedPixelsUsed(slots)
 
@@ -658,6 +654,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     pendingRollPixelsRef.current.clear()
     setGlowPauseUntil(null)
     glowPauseUntilRef.current = null
+    setIsResultPanelOpen(false)
     await stopAllGlows()
     // Cancel any queued reconnects when the roll is cancelled
     try {
@@ -942,8 +939,6 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     setNavigationIntent({ message: 'Formula deleted' })
   }
 
-  // Cleanup effect: on unmount clear any pending scheduled prompt and
-  // stop all hardware glows to leave the device in a quiet state.
   useEffect(() => {
     return () => {
       clearPendingGlowPrompt()
@@ -951,15 +946,11 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     }
   }, [clearPendingGlowPrompt])
 
-  // Reset guards that prevent repeated auto-focus/auto-start when the
-  // navigation location changes.
   useEffect(() => {
     hasAutoFocusedRollEngineRef.current = false
     hasAutoStartedRollRef.current = false
   }, [location.key])
 
-  // Auto-scroll the roll engine into view if the route requested focus.
-  // Uses a ref guard so this happens only once per navigation.
   useEffect(() => {
     if (!isReady || !locationState?.focusRollEngine || formulaText.trim() === '' || hasAutoFocusedRollEngineRef.current) {
       return
@@ -975,8 +966,6 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     }
   }, [formulaText, isReady, locationState, scrollRollEngineIntoView])
 
-  // In roll-only mode, automatically start the roll once the screen is
-  // ready and the engine hasn't already auto-started.
   useEffect(() => {
     if (
       !isRollOnly ||
@@ -993,8 +982,6 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     void handleRoll()
   }, [completedRollResult, formulaText, isReady, isRollOnly, rollSession])
 
-  // If a pending scroll into view was requested when starting a roll,
-  // perform it once and clear the flag.
   useEffect(() => {
     if (!pendingRollScrollRef.current || !rollSession) {
       return
@@ -1010,8 +997,6 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     }
   }, [rollSession, scrollRollEngineIntoView])
 
-  // During roll-only mode, start a short countdown after a result and
-  // auto-navigate back when the countdown expires.
   useEffect(() => {
     if (!isRollOnly || !completedRollResult) {
       setAutoHideRemainingMs(null)
@@ -1038,8 +1023,6 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     }
   }, [completedRollResult, isRollOnly])
 
-  // If all slots are populated with faces, finalize the roll session and
-  // compute/store results.
   useEffect(() => {
     if (!rollSession || rollSession.result !== null) {
       return
@@ -1050,10 +1033,6 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     }
   }, [completeRollSession, rollSession])
 
-  // Subscribe to SDK roll-result events while awaiting rolls. Update the
-  // matching slot when a result arrives, clear pending prompts for that
-  // pixel, and compute whether to suppress or resume scheduled glows
-  // based on whether any still-pending pixels are actively rolling.
   useEffect(() => {
     if (!isAwaitingRolls) {
       return
@@ -1104,19 +1083,12 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
           pendingRollPixelsRef.current.delete(pixelId)
         }
       } catch {}
-      // Decide suppression vs resume based only on whether any of the
-      // still-pending pixels are actively rolling. If none are rolling
-      // we allow scheduled prompt glows to continue; only when motion is
-      // detected do we suppress until explicit resume.
-      const pendingIds = Array.from(pendingRollPixelsRef.current)
-      const storeState = useAppStore.getState()
-      const anyRolling = pendingIds.some((id) => storeState.pixels[id]?.isRolling === true)
 
-      // If none of the pending pixels are currently rolling, schedule a
-      // short resume window so scheduled prompt glows restart after the
-      // quiet period. If any pending pixel is actively rolling, keep
-      // prompts suppressed until an explicit resume.
-      if (!anyRolling) {
+      const pendingIds = Array.from(pendingRollPixelsRef.current)
+      const storePixels = useAppStore.getState().pixels
+      const anyPendingRolling = pendingIds.some((id) => storePixels[id]?.isRolling === true)
+
+      if (!anyPendingRolling) {
         const resumeUntil = Date.now() + ROLL_GLOW_RESUME_DELAY_MS
         setGlowPauseUntil(resumeUntil)
         glowPauseUntilRef.current = resumeUntil
@@ -1128,13 +1100,12 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     })
   }, [clearPendingGlowPrompt, isAwaitingRolls])
 
-  // Watch the `pixels` store and, if any pixel assigned to the current
-  // roll is actively rolling, apply suppression so scheduled prompts
-  // don't interrupt the physical roll.
   useEffect(() => {
     if (pendingRollPixelsRef.current.size === 0) return
+
     const pendingIds = Array.from(pendingRollPixelsRef.current)
     const anyRolling = pendingIds.some((id) => pixels[id]?.isRolling === true)
+
     if (anyRolling) {
       const suppressUntil = Date.now() + ROLL_GLOW_SUPPRESS_WHILE_PENDING_MS
       setGlowPauseUntil(suppressUntil)
@@ -1146,10 +1117,6 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     }
   }, [pixels])
 
-  // While a roll is active, compute an availability plan and attempt a
-  // single-shot set of connects/disconnects for remembered dice needed
-  // by the session. Persist initial connect/disconnect decisions to avoid
-  // repeated expansion across retries.
   useEffect(() => {
     if (!isAwaitingRolls || !rollSession || rollSession.result !== null) {
       return
@@ -1395,9 +1362,6 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     }
   }, [isAwaitingRolls, rollSession, scheduleGlowPrompt])
 
-  // Recompute slot assignments when the set of connected pixels changes
-  // and schedule prompt glows for any newly-assigned pending slots so the
-  // user sees updated assignments immediately.
   useEffect(() => {
     if (!isAwaitingRolls) {
       return
@@ -1444,10 +1408,6 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     }
   }, [connectedPixels, isAwaitingRolls, scheduleGlowPrompt])
 
-  // Periodically trigger prompt glows for pending slots, respecting a
-  // pause window (`glowPauseUntil`). When a pause is active we schedule
-  // an immediate resume for when the pause expires to avoid waiting for
-  // the next interval tick.
   useEffect(() => {
     if (!isAwaitingRolls || !rollSession || rollSession.result !== null) {
       return
@@ -1490,9 +1450,6 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     }
   }, [isAwaitingRolls, rollSession, glowPauseUntil, handlePromptPendingDice])
 
-  // Convert slots to manual entry or mark for reconnect recovery when a
-  // required die type is not connected during an active roll. Updates the
-  // roll session status message accordingly.
   useEffect(() => {
     if (!isAwaitingRolls) {
       return
@@ -1554,9 +1511,6 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
 
   // Detect when previously-connected pixels disconnect during an active
   // roll and enqueue bounded reconnect attempts for those remembered dice.
-  // Detect disconnects that occur during an active roll and enqueue
-  // bounded reconnect attempts for remembered dice that the roll needs.
-  // Also maintain a previous-connection snapshot for change detection.
   useEffect(() => {
     if (!isAwaitingRolls || !rollSession) {
       // Keep prev snapshot in sync outside of rolls
@@ -1644,7 +1598,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
           >
             Cancel roll
           </button>
-        ) : completedRollResult ? (
+        ) : completedRollResult && !isResultPanelOpen ? (
           <button
             type="button"
             onClick={() => {
@@ -1726,6 +1680,19 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
     </section>
   ) : null
 
+  const resultPanel = completedRollResult ? (
+    <ResultPanel
+      open={isResultPanelOpen}
+      formulaName={name.trim() || undefined}
+      formulaString={formulaText}
+      result={completedRollResult}
+      onRollAgain={() => {
+        void handleRoll()
+      }}
+      onClose={() => setIsResultPanelOpen(false)}
+    />
+  ) : null
+
   if (isRollOnly) {
     return (
       <main className="min-h-screen bg-[radial-gradient(circle_at_top,#2d2340,transparent_35%),linear-gradient(180deg,#17121d_0%,#0e0b12_100%)] px-4 py-5 text-[#f7ead4] md:px-8 md:py-8">
@@ -1754,6 +1721,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
             ) : null}
 
             {rollEngineSection}
+            {resultPanel}
           </section>
         </div>
       </main>
@@ -2011,6 +1979,7 @@ export default function FormulaScreen({ mode = 'builder' }: { mode?: FormulaScre
           </section>
 
           {rollEngineSection}
+          {resultPanel}
 
           <section className="flex flex-wrap justify-end gap-3 border-2 border-[#8a72a8] bg-[#15111a] p-4 shadow-[6px_6px_0_0_#09070d]">
             <button

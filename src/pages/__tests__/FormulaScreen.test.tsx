@@ -565,6 +565,118 @@ describe('FormulaScreen', () => {
     expect(mockGlowDie).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps periodic reprompts paused while a pending assigned die is actively rolling', async () => {
+    vi.useFakeTimers()
+
+    useAppStore.setState({
+      pixels: {
+        'pixel-d20-a': {
+          pixelId: 'pixel-d20-a',
+          dieType: 'd20',
+          connectionState: 'connected',
+          batteryLevel: 80,
+          lastFace: null,
+          isRolling: false,
+        },
+        'pixel-d20-b': {
+          pixelId: 'pixel-d20-b',
+          dieType: 'd20',
+          connectionState: 'connected',
+          batteryLevel: 75,
+          lastFace: null,
+          isRolling: false,
+        },
+      },
+    })
+
+    renderFormulaScreen(['/formula/new'])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add d20' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add d20' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add d20' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Roll' }))
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(mockGlowDie).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      rollCallback?.('pixel-d20-a', 18, 'd20')
+      await Promise.resolve()
+    })
+
+    mockGlowDie.mockClear()
+
+    await act(async () => {
+      useAppStore.setState({
+        pixels: {
+          'pixel-d20-a': {
+            pixelId: 'pixel-d20-a',
+            dieType: 'd20',
+            connectionState: 'connected',
+            batteryLevel: 80,
+            lastFace: 18,
+            isRolling: false,
+          },
+          'pixel-d20-b': {
+            pixelId: 'pixel-d20-b',
+            dieType: 'd20',
+            connectionState: 'connected',
+            batteryLevel: 75,
+            lastFace: null,
+            isRolling: true,
+          },
+        },
+      })
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000)
+    })
+
+    expect(mockGlowDie).toHaveBeenCalledTimes(0)
+
+    await act(async () => {
+      useAppStore.setState({
+        pixels: {
+          'pixel-d20-a': {
+            pixelId: 'pixel-d20-a',
+            dieType: 'd20',
+            connectionState: 'connected',
+            batteryLevel: 80,
+            lastFace: 18,
+            isRolling: false,
+          },
+          'pixel-d20-b': {
+            pixelId: 'pixel-d20-b',
+            dieType: 'd20',
+            connectionState: 'connected',
+            batteryLevel: 75,
+            lastFace: null,
+            isRolling: false,
+          },
+        },
+      })
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_900)
+    })
+
+    expect(mockGlowDie).toHaveBeenCalledTimes(0)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100)
+    })
+
+    expect(mockGlowDie).toHaveBeenCalledTimes(2)
+    expect(mockGlowDie).toHaveBeenCalledWith('pixel-d20-b')
+  })
+
   it('routes missing dice to manual entry and completes after submit', async () => {
     renderFormulaScreen(['/formula/new'])
 
@@ -754,6 +866,10 @@ describe('FormulaScreen', () => {
       rollCallback?.('pixel-d20', 18, 'd20')
     })
 
+    expect(await screen.findByRole('dialog', { name: '1d20' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Close result panel' }))
+
+    expect(screen.queryByRole('dialog', { name: '1d20' })).not.toBeInTheDocument()
     expect(await screen.findByText('Total: 18')).toBeInTheDocument()
     expect(screen.getByText('18')).toBeInTheDocument()
 

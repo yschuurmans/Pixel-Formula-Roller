@@ -5,20 +5,21 @@ import formatRollLabel from '../utils/formatRollLabel'
 export default function ResultPanel({
   open,
   formulaName,
+  formulaString,
   result,
   onRollAgain,
   onClose,
   variant,
 }: {
   open: boolean
-  formulaName: string
+  formulaName?: string
+  formulaString: string
   result: EvaluationResult
   onRollAgain?: () => void
   onClose: () => void
   variant?: 'sheet' | 'modal'
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const closeButtonRef = useRef<HTMLButtonElement | null>(null)
 
   const [resolvedVariant, setResolvedVariant] = useState<'sheet' | 'modal'>(() => {
     if (variant) return variant
@@ -37,8 +38,11 @@ export default function ResultPanel({
   useEffect(() => {
     if (!open) return
     const prevActive = document.activeElement as HTMLElement | null
-    window.setTimeout(() => {
-      closeButtonRef.current?.focus()
+    const focusTimeout = window.setTimeout(() => {
+      const focusable = containerRef.current?.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      )
+      focusable?.[0]?.focus()
     }, 0)
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -80,33 +84,37 @@ export default function ResultPanel({
     document.addEventListener('keydown', onKeyDown)
     return () => {
       document.removeEventListener('keydown', onKeyDown)
+      window.clearTimeout(focusTimeout)
       prevActive?.focus?.()
     }
   }, [open])
 
   if (!open) return null
 
+  const resolvedFormulaName = formulaName?.trim() || ''
+  const resolvedFormulaString = formulaString.trim()
+  const title = resolvedFormulaName || resolvedFormulaString || 'Result'
+
   return (
     <div className="fixed inset-0 z-30">
       <div className="absolute inset-0 bg-black/75" aria-hidden />
 
-      <div
-        className={`absolute inset-0 flex ${resolvedVariant === 'sheet' ? 'items-end justify-center' : 'items-center justify-center'}`}
-        aria-hidden
-      >
+      <div className={`absolute inset-0 flex ${resolvedVariant === 'sheet' ? 'items-end justify-center' : 'items-center justify-center'}`}>
         <div
           ref={containerRef}
           role="dialog"
           aria-modal="true"
           aria-labelledby="result-panel-title"
-          className={`w-full ${resolvedVariant === 'sheet' ? 'rounded-t-lg border-2 border-[#8a72a8] bg-[#15111a] p-4 shadow-[8px_8px_0_0_#09070d]' : 'max-w-2xl rounded-lg border-2 border-[#8a72a8] bg-[#15111a] p-5 shadow-[8px_8px_0_0_#09070d]'}`}
+          className={`max-h-[calc(100vh-1.25rem)] overflow-y-auto w-full ${resolvedVariant === 'sheet' ? 'rounded-t-lg border-2 border-[#8a72a8] bg-[#15111a] p-4 shadow-[8px_8px_0_0_#09070d]' : 'max-w-2xl rounded-lg border-2 border-[#8a72a8] bg-[#15111a] p-5 shadow-[8px_8px_0_0_#09070d]'}`}
         >
           <div className="flex items-start justify-between gap-3">
             <div>
               <h2 id="result-panel-title" className="text-sm text-[#f7ead4]">
-                {formulaName || 'Result'}
+                {title}
               </h2>
-              <p className="mt-1 font-mono text-[11px] text-[#d8cef1]">{/* placeholder for potential subtitle */}</p>
+              {resolvedFormulaName && resolvedFormulaString && resolvedFormulaString !== resolvedFormulaName ? (
+                <p className="mt-1 font-mono text-[11px] text-[#d8cef1]">{resolvedFormulaString}</p>
+              ) : null}
             </div>
 
             <div className="flex items-center gap-2">
@@ -121,12 +129,12 @@ export default function ResultPanel({
               ) : null}
 
               <button
-                ref={closeButtonRef}
                 type="button"
                 onClick={() => onClose()}
+                aria-label="Close result panel"
                 className="border-2 border-[#7d6b95] bg-[#251d2e] px-3 py-2 text-[10px] text-[#f7ead4]"
               >
-                Close
+                ✕
               </button>
             </div>
           </div>
