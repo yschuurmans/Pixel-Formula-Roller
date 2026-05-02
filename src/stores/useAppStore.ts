@@ -60,6 +60,7 @@ interface AppActions {
   addSavedFormula: (formula: SavedFormula) => void;
   updateSavedFormula: (id: string, updates: Partial<SavedFormula>) => void;
   deleteSavedFormula: (id: string) => void;
+  moveSavedFormula: (id: string, targetIndex: number) => boolean;
   addRollHistory: (entry: RollHistoryEntry) => void;
   clearRollHistory: () => void;
   createProfile: (name: string) => string | null;
@@ -376,6 +377,36 @@ export const useAppStore = create<AppState & AppActions>()(
           formulas: profile.formulas.filter((f) => f.id !== id),
           updatedAt: Date.now(),
         }))),
+      moveSavedFormula: (id, targetIndex) => {
+        let moved = false;
+
+        set((state) => updateActiveProfile(state, (profile) => {
+          const currentIndex = profile.formulas.findIndex((formula) => formula.id === id);
+          if (currentIndex < 0) {
+            return profile;
+          }
+
+          const nextFormulas = [...profile.formulas];
+          const [movedFormula] = nextFormulas.splice(currentIndex, 1);
+          const insertIndex = currentIndex < targetIndex ? targetIndex - 1 : targetIndex;
+          const boundedInsertIndex = Math.max(0, Math.min(insertIndex, nextFormulas.length));
+
+          if (boundedInsertIndex === currentIndex) {
+            return profile;
+          }
+
+          nextFormulas.splice(boundedInsertIndex, 0, movedFormula);
+          moved = true;
+
+          return {
+            ...profile,
+            formulas: nextFormulas,
+            updatedAt: Date.now(),
+          };
+        }));
+
+        return moved;
+      },
       addRollHistory: (entry) =>
         set((state) => updateActiveProfile(state, (profile) => ({
           ...profile,

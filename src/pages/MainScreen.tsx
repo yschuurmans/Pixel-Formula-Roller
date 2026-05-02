@@ -5,7 +5,8 @@ import {
 import type { DieRollResult } from '../types/formula'
 import DieResultChip from '../components/DieResultChip'
 import CharacterSheet from '../components/CharacterSheet'
-import AdvantagePrompt from '../components/AdvantagePrompt'
+import RollOptionsModal from '../components/AdvantagePrompt'
+import LongPressButton from '../components/LongPressButton'
 import { displayDieType } from './formulaHelpers'
 import { useMainScreenController } from '../application/mainScreen/useMainScreenController'
 
@@ -137,58 +138,86 @@ export default function MainScreen() {
               </div>
             ) : (
               <div className="grid gap-4 md:grid-cols-2">
-                {vm.savedFormulas.map((formula) => (
-                  <article
-                    key={formula.id}
-                    className="relative border-2 border-[#5d4a7a] bg-[#1b1522] p-3 shadow-[5px_5px_0_0_#09070d]"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => vm.openFormulaMenu(formula.id)}
-                      aria-label={`More options for ${formula.name}`}
-                      className="absolute right-2 top-2 border border-[#7d6b95] bg-[#2b2136] px-2 py-1 text-xs leading-none text-[#f7ead4]"
-                    >
-                      ⋮
-                    </button>
+                {vm.savedFormulas.map((formula) => {
+                  const isSelected = vm.selectedFormulaIds.includes(formula.id)
+                  const isDragging = vm.draggingFormulaId === formula.id
+                  const isDropTarget = vm.dragTargetFormulaId === formula.id && !isDragging
 
-                    {vm.activeMenuId === formula.id ? (
-                      <div className="absolute right-2 top-10 z-10 min-w-30 border-2 border-[#8a72a8] bg-[#110d16] shadow-[4px_4px_0_0_#09070d]">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            vm.closeFormulaMenu()
-                            vm.navigateToEditFormula(formula.id)
-                          }}
-                          className="block w-full border-b border-[#4d3d61] px-3 py-3 text-left text-[10px] text-[#f7ead4] hover:bg-[#241b2d]"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            vm.closeFormulaMenu()
-                            vm.openDeleteDialog(formula)
-                          }}
-                          className="block w-full px-3 py-3 text-left text-[10px] text-[#ff9aa2] hover:bg-[#241b2d]"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    ) : null}
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        vm.closeFormulaMenu()
-                        vm.navigateToRollFormula(formula.id)
-                      }}
-                      className="block w-full pr-8 text-left"
+                  return (
+                    <article
+                      key={formula.id}
+                      data-formula-card-id={formula.id}
+                      className={`relative border-2 p-3 shadow-[5px_5px_0_0_#09070d] transition-transform ${
+                        isDragging
+                          ? 'z-10 scale-[1.03] border-[#ffd166] bg-[#2d2414] shadow-[8px_8px_0_0_#09070d]'
+                          : isDropTarget
+                            ? 'border-dashed border-[#ffd166] bg-[#241d12] ring-2 ring-inset ring-[#ffd166]'
+                            : isSelected
+                              ? 'border-[#ffd166] bg-[#2a2111]'
+                              : 'border-[#5d4a7a] bg-[#1b1522]'
+                      }`}
                     >
-                      <h3 className="text-sm leading-snug text-[#f7ead4]">{formula.name}</h3>
-                      <p className="mt-4 font-mono text-xs text-[#d8cef1]">{formula.formula}</p>
-                    </button>
-                  </article>
-                ))}
+                      <button
+                        type="button"
+                        onPointerDown={(event) => vm.handleFormulaCardPointerDown(formula.id, event)}
+                        onClick={() => {
+                          vm.closeFormulaMenu()
+                          vm.handleFormulaCardClick(formula.id)
+                        }}
+                        onContextMenu={(event) => event.preventDefault()}
+                        aria-label={`Open formula ${formula.name}`}
+                        className="block w-full pr-12 pb-8 text-left"
+                      >
+                        <h3 className="text-sm leading-snug text-[#f7ead4]">{formula.name}</h3>
+                        <p className="mt-4 font-mono text-xs text-[#d8cef1]">{formula.formula}</p>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => vm.openFormulaMenu(formula.id)}
+                        aria-label={`More options for ${formula.name}`}
+                        className="absolute right-2 top-2 border border-[#7d6b95] bg-[#2b2136] px-2 py-1 text-xs leading-none text-[#f7ead4]"
+                      >
+                        ⋮
+                      </button>
+
+                      {vm.activeMenuId === formula.id ? (
+                        <div className="absolute right-2 top-10 z-10 min-w-30 border-2 border-[#8a72a8] bg-[#110d16] shadow-[4px_4px_0_0_#09070d]">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              vm.closeFormulaMenu()
+                              vm.navigateToEditFormula(formula.id)
+                            }}
+                            className="block w-full border-b border-[#4d3d61] px-3 py-3 text-left text-[10px] text-[#f7ead4] hover:bg-[#241b2d]"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              vm.closeFormulaMenu()
+                              vm.openDeleteDialog(formula)
+                            }}
+                            className="block w-full px-3 py-3 text-left text-[10px] text-[#ff9aa2] hover:bg-[#241b2d]"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      ) : null}
+
+                      <label className="absolute bottom-2 right-2 z-10 flex items-center gap-2 text-[9px] text-[#c5b7d8]">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => vm.toggleCombinedFormulaSelection(formula.id)}
+                          aria-label={`Select ${formula.name} for combined roll`}
+                          className="h-4 w-4 accent-[#ffd166]"
+                        />
+                      </label>
+                    </article>
+                  )
+                })}
               </div>
             )}
           </section>
@@ -236,13 +265,52 @@ export default function MainScreen() {
         </div>
       </div>
 
-      <AdvantagePrompt
+      <RollOptionsModal
         open={vm.characterPromptSkill !== null}
-        skill={vm.characterPromptSkill}
-        modifier={vm.characterPromptSkill?.modifier ?? 0}
+        title={vm.characterPromptSkill?.label ?? 'Character Check'}
+        eyebrow="Character Check"
+        description={vm.characterPromptSkill ? `Modifier ${vm.characterPromptSkill.modifier >= 0 ? `+${vm.characterPromptSkill.modifier}` : vm.characterPromptSkill.modifier}` : undefined}
+        options={vm.characterPromptSkill ? [
+          { choice: 'advantage', label: 'Advantage', detail: `2d20kh1${vm.characterPromptSkill.modifier >= 0 ? '+' : ''}${vm.characterPromptSkill.modifier}`, tone: 'good', icon: { kind: 'd20', accent: '#17301f', stacked: true, symbol: 'plus' } },
+          { choice: 'normal', label: 'Normal', detail: `1d20${vm.characterPromptSkill.modifier >= 0 ? '+' : ''}${vm.characterPromptSkill.modifier}`, tone: 'neutral', icon: { kind: 'd20', accent: '#102a3a' } },
+          { choice: 'disadvantage', label: 'Disadvantage', detail: `2d20kl1${vm.characterPromptSkill.modifier >= 0 ? '+' : ''}${vm.characterPromptSkill.modifier}`, tone: 'bad', icon: { kind: 'd20', accent: '#7a1d2a', stacked: true, symbol: 'minus' } },
+        ] : []}
         onChoose={vm.handleCharacterPromptChoose}
         onClose={vm.closeCharacterPrompt}
       />
+
+      <RollOptionsModal
+        open={vm.isCombinedRollPromptOpen}
+        title="Combined Roll"
+        eyebrow="Roll Options"
+        description="Choose how to launch the selected formulas."
+        options={vm.combinedRollPromptOptions}
+        onChoose={vm.handleCombinedRollPromptChoose}
+        onClose={vm.closeCombinedRollPrompt}
+      />
+
+      <RollOptionsModal
+        open={vm.isFormulaRollPromptOpen}
+        title={vm.formulaRollPromptFormula?.name ?? 'Saved Formula'}
+        eyebrow="Saved Formula"
+        description="Choose how to launch this saved formula."
+        options={vm.formulaRollPromptOptions}
+        onChoose={vm.handleFormulaRollPromptChoose}
+        onClose={vm.closeFormulaRollPrompt}
+      />
+
+      {vm.selectedFormulaIds.length > 0 ? (
+        <LongPressButton
+          type="button"
+          onClick={vm.handleCombinedRollTap}
+          onLongPress={vm.handleCombinedRollLongPress}
+          longPressMs={1000}
+          aria-label="Roll selected formulas"
+          className="fixed bottom-4 right-4 z-30 border-2 border-[#ffd166] bg-[#3b2a11] px-5 py-4 text-[11px] uppercase tracking-[0.18em] text-[#fff0bf] shadow-[6px_6px_0_0_#120c06] transition-transform active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+        >
+          Roll
+        </LongPressButton>
+      ) : null}
 
       {vm.isProfileManagerOpen ? (
         <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/75 px-4">

@@ -16,6 +16,7 @@ function baseHistoryEntry(id: string) {
     parsedFormula: {
       groups: [{ dieType: 'd20' as const, count: 1 }],
       flatModifier: 5,
+      expression: '1d20+5',
       raw: '1d20+5',
       canonical: '1d20+5',
     },
@@ -182,6 +183,37 @@ describe('useAppStore persistence', () => {
     useAppStore.getState().addRollHistory(baseHistoryEntry('active'))
     expect(useAppStore.getState().profiles[createdId!].history).toHaveLength(1)
     expect(useAppStore.getState().profiles.default.history).toHaveLength(0)
+  })
+
+  it('moves saved formulas within the active profile order', () => {
+    useAppStore.getState().addSavedFormula({
+      id: 'formula-1',
+      name: 'Alpha',
+      formula: '1d4',
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    useAppStore.getState().addSavedFormula({
+      id: 'formula-2',
+      name: 'Beta',
+      formula: '1d6',
+      createdAt: 2,
+      updatedAt: 2,
+    })
+    useAppStore.getState().addSavedFormula({
+      id: 'formula-3',
+      name: 'Gamma',
+      formula: '1d8',
+      createdAt: 3,
+      updatedAt: 3,
+    })
+
+    expect(useAppStore.getState().moveSavedFormula('formula-1', 3)).toBe(true)
+    expect(useAppStore.getState().profiles.default.formulas.map((formula) => formula.id)).toEqual([
+      'formula-2',
+      'formula-3',
+      'formula-1',
+    ])
   })
 
   it('manages character skills and auto-seeds when character mode is enabled', () => {

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { connectDie, glowDie } from '../../services/pixelsService'
+import { buildCombinedFormula, transformCombinedFormula, transformSavedFormulaRoll, type CombinedRollMode, type SavedFormulaRollMode } from '../rollHelpers'
 import {
   STORAGE_WARNING_EVENT,
   STORAGE_WARNING_MESSAGE,
@@ -11,6 +12,7 @@ import {
   type SavedFormula,
   useAppStore,
 } from '../../stores/useAppStore'
+import type { RollOptionsModalOption } from '../../components/AdvantagePrompt'
 import {
   MainScreenController,
   type MainScreenLocationState,
@@ -18,8 +20,23 @@ import {
 } from './MainScreenController'
 
 const QUICK_CONNECT_HOLD_MS = 500
+const FORMULA_CARD_HOLD_MS = 1000
+const FORMULA_CARD_DRAG_THRESHOLD_PX = 12
 
 type CharacterRollMode = 'normal' | 'advantage' | 'disadvantage'
+type CombinedRollChoice = 'normal' | 'doubleDice' | 'doubleAll'
+type FormulaRollChoice = 'normal' | 'doubleDice' | 'doubleAll'
+
+type FormulaHoldState = {
+  formulaId: string
+  pointerId: number
+  startX: number
+  startY: number
+  lastX: number
+  lastY: number
+  holdTriggered: boolean
+  dragging: boolean
+}
 
 
 export function useMainScreenController() {
@@ -33,6 +50,7 @@ export function useMainScreenController() {
   const bleError = useAppStore((state) => state.bleError)
   const pixels = useAppStore((state) => state.pixels)
   const deleteSavedFormula = useAppStore((state) => state.deleteSavedFormula)
+  const moveSavedFormula = useAppStore((state) => state.moveSavedFormula)
   const clearBleError = useAppStore((state) => state.clearBleError)
   const createProfile = useAppStore((state) => state.createProfile)
   const renameProfile = useAppStore((state) => state.renameProfile)
@@ -51,11 +69,21 @@ export function useMainScreenController() {
   const [isQuickConnecting, setIsQuickConnecting] = useState(false)
   const [selectedHistoryEntry, setSelectedHistoryEntry] = useState<RollHistoryEntry | null>(null)
   const [characterPromptSkill, setCharacterPromptSkill] = useState<ProfileSkill | null>(null)
+  const [selectedFormulaIds, setSelectedFormulaIds] = useState<string[]>([])
+  const [isCombinedRollPromptOpen, setIsCombinedRollPromptOpen] = useState(false)
+  const [formulaRollPromptFormulaId, setFormulaRollPromptFormulaId] = useState<string | null>(null)
+  const [draggingFormulaId, setDraggingFormulaId] = useState<string | null>(null)
+  const [dragTargetFormulaId, setDragTargetFormulaId] = useState<string | null>(null)
   const [toast, setToast] = useState<ToastState | null>(null)
   const toastId = useRef(0)
   const toastTimeoutRef = useRef<number | null>(null)
   const quickConnectHoldTimer = useRef<number | null>(null)
   const quickConnectHoldTriggered = useRef(false)
+  const formulaHoldTimer = useRef<number | null>(null)
+  const formulaHoldState = useRef<FormulaHoldState | null>(null)
+  const formulaHoldSuppressClick = useRef(false)
+  const formulaDragTargetIndex = useRef<number | null>(null)
+  const formulaHoldListenersCleanup = useRef<(() => void) | null>(null)
 
   const bannerMessage = useMemo(() => controller.getBannerMessage(bleAvailable), [bleAvailable, controller])
   const connectedPixelIds = useMemo(() => controller.getConnectedPixelIds(pixels), [controller, pixels])
@@ -71,6 +99,88 @@ export function useMainScreenController() {
   const rollHistory = activeProfile?.history ?? []
   const recentHistory = useMemo(() => controller.getRecentHistory(rollHistory), [controller, rollHistory])
   const fullHistory = useMemo(() => controller.getFullHistory(rollHistory), [controller, rollHistory])
+  const selectedFormulas = useMemo(
+    () => savedFormulas.filter((formula) => selectedFormulaIds.includes(formula.id)),
+    [savedFormulas, selectedFormulaIds],
+  )
+  const combinedRollFormula = useMemo(
+    () => buildCombinedFormula(selectedFormulas.map((formula) => formula.formula)),
+    [selectedFormulas],
+  )
+  const combinedRollPromptOptions = useMemo(() => {
+    if (!combinedRollFormula) {
+      return []
+    }
+
+    return [
+      {
+        choice: 'normal' as const,
+        label: 'Normal Roll',
+        detail: combinedRollFormula,
+        tone: 'neutral' as const,
+        icon: { kind: 'dice' as const, dieType: 'd20' as const },
+      },
+      {
+        choice: 'doubleDice' as const,
+        label: 'Double Dice',
+        detail: transformCombinedFormula(combinedRollFormula, 'doubleDice') ?? combinedRollFormula,
+        tone: 'good' as const,
+        icon: { kind: 'dice' as const, dieType: 'd20' as const, count: 2, badge: 'x2' },
+      },
+      {
+        choice: 'doubleAll' as const,
+        label: 'Double All',
+        detail: transformCombinedFormula(combinedRollFormula, 'doubleAll') ?? combinedRollFormula,
+        tone: 'bad' as const,
+        icon: { kind: 'dice' as const, dieType: 'd20' as const, count: 2, badge: 'x2 ALL' },
+      },
+    ]
+  }, [combinedRollFormula])
+
+  const formulaRollPromptFormula = useMemo(
+    () => savedFormulas.find((formula) => formula.id === formulaRollPromptFormulaId) ?? null,
+    [formulaRollPromptFormulaId, savedFormulas],
+  )
+
+  const formulaRollPromptOptions = useMemo<RollOptionsModalOption<FormulaRollChoice>[]>(() => {
+    if (!formulaRollPromptFormula) {
+      return []
+    }
+
+    const normalFormula = transformSavedFormulaRoll(formulaRollPromptFormula.formula, 'normal') ?? formulaRollPromptFormula.formula
+    const doubleDiceFormula = transformSavedFormulaRoll(formulaRollPromptFormula.formula, 'doubleDice') ?? formulaRollPromptFormula.formula
+    const doubleAllFormula = transformSavedFormulaRoll(formulaRollPromptFormula.formula, 'doubleAll') ?? formulaRollPromptFormula.formula
+
+    return [
+      {
+        choice: 'normal',
+        label: 'Normal Roll',
+        detail: normalFormula,
+        tone: 'neutral',
+        icon: { kind: 'dice' as const, dieType: 'd20' as const },
+      },
+      {
+        choice: 'doubleDice',
+        label: 'Double Dice',
+        detail: doubleDiceFormula,
+        tone: 'good',
+        icon: { kind: 'dice' as const, dieType: 'd20' as const, count: 2, badge: 'x2' },
+      },
+      {
+        choice: 'doubleAll',
+        label: 'Double All',
+        detail: doubleAllFormula,
+        tone: 'bad',
+        icon: { kind: 'dice' as const, dieType: 'd20' as const, count: 2, badge: 'x2 ALL' },
+      },
+    ]
+  }, [formulaRollPromptFormula])
+
+  useEffect(() => {
+    if (formulaRollPromptFormulaId && !formulaRollPromptFormula) {
+      setFormulaRollPromptFormulaId(null)
+    }
+  }, [formulaRollPromptFormula, formulaRollPromptFormulaId])
 
   const closeCharacterPrompt = useCallback(() => {
     setCharacterPromptSkill(null)
@@ -126,6 +236,281 @@ export function useMainScreenController() {
       })
     },
     [buildCharacterRollTarget, characterPromptSkill, closeCharacterPrompt, navigate],
+  )
+
+  const clearCombinedSelection = useCallback(() => {
+    setSelectedFormulaIds([])
+  }, [])
+
+  const closeCombinedRollPrompt = useCallback(() => {
+    setIsCombinedRollPromptOpen(false)
+  }, [])
+
+  const toggleCombinedFormulaSelection = useCallback((formulaId: string) => {
+    setSelectedFormulaIds((current) =>
+      current.includes(formulaId)
+        ? current.filter((currentFormulaId) => currentFormulaId !== formulaId)
+        : [...current, formulaId],
+    )
+  }, [])
+
+  const launchCombinedRoll = useCallback(
+    (choice: CombinedRollChoice = 'normal') => {
+      if (!combinedRollFormula) {
+        return
+      }
+
+      const formulaText =
+        choice === 'normal'
+          ? combinedRollFormula
+          : transformCombinedFormula(combinedRollFormula, choice as CombinedRollMode)
+
+      if (!formulaText) {
+        return
+      }
+
+      closeCombinedRollPrompt()
+      clearCombinedSelection()
+      navigate('/roll', {
+        state: {
+          formulaText,
+          name: 'Combined Roll',
+          focusRollEngine: true,
+        },
+      })
+    },
+    [clearCombinedSelection, closeCombinedRollPrompt, combinedRollFormula, navigate],
+  )
+
+  const handleCombinedRollTap = useCallback(() => {
+    launchCombinedRoll('normal')
+  }, [launchCombinedRoll])
+
+  const handleCombinedRollLongPress = useCallback(() => {
+    if (selectedFormulas.length === 0) {
+      return
+    }
+
+    setIsCombinedRollPromptOpen(true)
+  }, [selectedFormulas.length])
+
+  const handleCombinedRollPromptChoose = useCallback(
+    (choice: CombinedRollChoice) => {
+      launchCombinedRoll(choice)
+    },
+    [launchCombinedRoll],
+  )
+
+  const clearFormulaHoldTimer = useCallback(() => {
+    if (formulaHoldTimer.current !== null) {
+      window.clearTimeout(formulaHoldTimer.current)
+      formulaHoldTimer.current = null
+    }
+  }, [])
+
+  const clearFormulaHoldListeners = useCallback(() => {
+    formulaHoldListenersCleanup.current?.()
+    formulaHoldListenersCleanup.current = null
+  }, [])
+
+  const resetFormulaInteractionState = useCallback(() => {
+    clearFormulaHoldTimer()
+    clearFormulaHoldListeners()
+    formulaHoldState.current = null
+    formulaHoldSuppressClick.current = false
+    formulaDragTargetIndex.current = null
+    setDraggingFormulaId(null)
+    setDragTargetFormulaId(null)
+  }, [clearFormulaHoldListeners, clearFormulaHoldTimer])
+
+  const openFormulaRollPrompt = useCallback((formulaId: string) => {
+    setFormulaRollPromptFormulaId(formulaId)
+  }, [])
+
+  const closeFormulaRollPrompt = useCallback(() => {
+    setFormulaRollPromptFormulaId(null)
+  }, [])
+
+  const updateFormulaDragTarget = useCallback(
+    (clientY: number) => {
+      const activeState = formulaHoldState.current
+      if (!activeState) {
+        return
+      }
+
+      const cardElements = Array.from(document.querySelectorAll<HTMLElement>('[data-formula-card-id]'))
+      const cardIds = cardElements.map((element) => element.dataset.formulaCardId).filter((formulaId): formulaId is string => Boolean(formulaId))
+      const activeIndex = cardIds.indexOf(activeState.formulaId)
+
+      if (activeIndex < 0) {
+        return
+      }
+
+      let targetIndex = cardElements.length
+      for (let index = 0; index < cardElements.length; index += 1) {
+        const element = cardElements[index]
+        if (element.dataset.formulaCardId === activeState.formulaId) {
+          continue
+        }
+
+        const rect = element.getBoundingClientRect()
+        if (clientY < rect.top + rect.height / 2) {
+          targetIndex = index
+          break
+        }
+      }
+
+      const targetFormulaId = cardIds[Math.min(targetIndex, cardIds.length - 1)] ?? null
+      setDragTargetFormulaId(targetFormulaId)
+
+      if (formulaDragTargetIndex.current === targetIndex) {
+        return
+      }
+
+      formulaDragTargetIndex.current = targetIndex
+      moveSavedFormula(activeState.formulaId, targetIndex)
+    },
+    [moveSavedFormula],
+  )
+
+  const startFormulaDrag = useCallback(
+    (state: FormulaHoldState) => {
+      if (state.dragging) {
+        return
+      }
+
+      const distance = Math.hypot(state.lastX - state.startX, state.lastY - state.startY)
+      if (distance < FORMULA_CARD_DRAG_THRESHOLD_PX) {
+        return
+      }
+
+      state.dragging = true
+      formulaHoldSuppressClick.current = true
+      setDraggingFormulaId(state.formulaId)
+      updateFormulaDragTarget(state.lastY)
+    },
+    [updateFormulaDragTarget],
+  )
+
+  const beginFormulaHoldListeners = useCallback(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      const state = formulaHoldState.current
+      if (!state || event.pointerId !== state.pointerId) {
+        return
+      }
+
+      state.lastX = event.clientX
+      state.lastY = event.clientY
+
+      if (state.holdTriggered) {
+        startFormulaDrag(state)
+        if (state.dragging) {
+          updateFormulaDragTarget(event.clientY)
+        }
+      }
+    }
+
+    const finishInteraction = (event: PointerEvent) => {
+      const state = formulaHoldState.current
+      if (!state || event.pointerId !== state.pointerId) {
+        return
+      }
+
+      clearFormulaHoldTimer()
+
+      if (state.holdTriggered && !state.dragging) {
+        formulaHoldSuppressClick.current = true
+        openFormulaRollPrompt(state.formulaId)
+      }
+
+      clearFormulaHoldListeners()
+      formulaHoldState.current = null
+      formulaDragTargetIndex.current = null
+      setDraggingFormulaId(null)
+      setDragTargetFormulaId(null)
+    }
+
+    const handlePointerCancel = (event: PointerEvent) => {
+      finishInteraction(event)
+    }
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', finishInteraction)
+    window.addEventListener('pointercancel', handlePointerCancel)
+
+    formulaHoldListenersCleanup.current = () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', finishInteraction)
+      window.removeEventListener('pointercancel', handlePointerCancel)
+    }
+  }, [clearFormulaHoldListeners, clearFormulaHoldTimer, openFormulaRollPrompt, startFormulaDrag, updateFormulaDragTarget])
+
+  const handleFormulaCardPointerDown = useCallback(
+    (formulaId: string, event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (event.button !== 0) {
+        return
+      }
+
+      resetFormulaInteractionState()
+      formulaHoldSuppressClick.current = false
+      formulaHoldState.current = {
+        formulaId,
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        lastX: event.clientX,
+        lastY: event.clientY,
+        holdTriggered: false,
+        dragging: false,
+      }
+
+      beginFormulaHoldListeners()
+
+      formulaHoldTimer.current = window.setTimeout(() => {
+        const state = formulaHoldState.current
+        if (!state || state.formulaId !== formulaId) {
+          return
+        }
+
+        state.holdTriggered = true
+        formulaHoldTimer.current = null
+        formulaHoldSuppressClick.current = true
+        startFormulaDrag(state)
+      }, FORMULA_CARD_HOLD_MS)
+    },
+    [beginFormulaHoldListeners, resetFormulaInteractionState, startFormulaDrag],
+  )
+
+  const handleFormulaCardClick = useCallback(
+    (formulaId: string) => {
+      if (formulaHoldSuppressClick.current) {
+        formulaHoldSuppressClick.current = false
+        return
+      }
+
+      navigate(`/roll/${formulaId}`)
+    },
+    [navigate],
+  )
+
+  const handleFormulaRollPromptChoose = useCallback(
+    (choice: FormulaRollChoice) => {
+      if (!formulaRollPromptFormula) {
+        return
+      }
+
+      const formulaText = transformSavedFormulaRoll(formulaRollPromptFormula.formula, choice as SavedFormulaRollMode) ?? formulaRollPromptFormula.formula
+
+      closeFormulaRollPrompt()
+      navigate('/roll', {
+        state: {
+          formulaText,
+          name: formulaRollPromptFormula.name,
+          focusRollEngine: true,
+        },
+      })
+    },
+    [closeFormulaRollPrompt, formulaRollPromptFormula, navigate],
   )
 
   const openProfileManager = useCallback(() => {
@@ -350,6 +735,36 @@ export function useMainScreenController() {
     clearQuickConnectHoldTimer()
   }, [clearQuickConnectHoldTimer])
 
+  useEffect(() => {
+    setSelectedFormulaIds((current) => {
+      const validFormulaIds = new Set(savedFormulas.map((formula) => formula.id))
+      return current.filter((formulaId) => validFormulaIds.has(formulaId))
+    })
+  }, [savedFormulas])
+
+  useEffect(() => {
+    setSelectedFormulaIds([])
+    setIsCombinedRollPromptOpen(false)
+    setFormulaRollPromptFormulaId(null)
+    resetFormulaInteractionState()
+  }, [activeProfileId])
+
+  useEffect(() => {
+    if (selectedFormulaIds.length === 0) {
+      setIsCombinedRollPromptOpen(false)
+    }
+  }, [selectedFormulaIds.length])
+
+  useEffect(() => {
+    if (draggingFormulaId && !savedFormulas.some((formula) => formula.id === draggingFormulaId)) {
+      resetFormulaInteractionState()
+    }
+  }, [draggingFormulaId, resetFormulaInteractionState, savedFormulas])
+
+  useEffect(() => () => {
+    resetFormulaInteractionState()
+  }, [resetFormulaInteractionState])
+
   return {
     activeMenuId,
     bannerMessage,
@@ -369,6 +784,14 @@ export function useMainScreenController() {
     isQuickConnecting,
     recentHistory,
     savedFormulas,
+    selectedFormulaIds,
+    combinedRollPromptOptions,
+    isCombinedRollPromptOpen,
+    formulaRollPromptFormula,
+    formulaRollPromptOptions,
+    isFormulaRollPromptOpen: formulaRollPromptFormula !== null,
+    draggingFormulaId,
+    dragTargetFormulaId,
     selectedHistoryEntry,
     characterPromptSkill,
     toast,
@@ -402,6 +825,15 @@ export function useMainScreenController() {
     handleCharacterSkillLongPress,
     handleCharacterPromptChoose,
     closeCharacterPrompt,
+    toggleCombinedFormulaSelection,
+    handleCombinedRollTap,
+    handleCombinedRollLongPress,
+    handleCombinedRollPromptChoose,
+    closeCombinedRollPrompt,
+    handleFormulaCardPointerDown,
+    handleFormulaCardClick,
+    handleFormulaRollPromptChoose,
+    closeFormulaRollPrompt,
     handleQuickConnectClick,
     handleQuickConnectHoldStart,
     handleQuickConnectHoldEnd,

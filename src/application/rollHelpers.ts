@@ -3,6 +3,9 @@ import { extractRequiredDice, parseFormula, formulaToPickerState } from '../serv
 import { createRollSlotId, createLogicalRollId, combinePercentFaces, pickRandomPixels } from '../pages/formulaHelpers'
 import type { RollSlot } from '../pages/availabilityHelpers'
 
+export type CombinedRollMode = 'normal' | 'doubleDice' | 'doubleAll'
+export type SavedFormulaRollMode = 'normal' | 'doubleDice' | 'doubleAll'
+
 export type KeepMode = 'kh' | 'kl'
 
 export type FormulaBuilderState = {
@@ -78,6 +81,85 @@ export function buildFormulaFromState(state: FormulaBuilderState): string {
   }
 
   return formula
+}
+
+export function buildCombinedFormula(formulas: string[]): string | null {
+  const combined = formulas
+    .map((formula) => formula.trim())
+    .filter((formula) => formula !== '')
+    .join('+')
+
+  return combined === '' ? null : combined
+}
+
+function serializeParsedFormula(formula: string, mode: CombinedRollMode): string | null {
+  const parsed = parseFormula(formula)
+  if (!parsed) {
+    return null
+  }
+
+  const parts = parsed.groups.map((group) => {
+    const count = mode === 'normal' ? group.count : group.count * 2
+    const keep = group.keep ? `${group.keep.mode}${group.keep.n}` : ''
+    return `${count}${group.dieType}${keep}`
+  })
+
+  const flatModifier = mode === 'doubleAll' ? parsed.flatModifier * 2 : parsed.flatModifier
+  let transformed = parts.join('+')
+
+  if (flatModifier !== 0) {
+    transformed = transformed ? `${transformed}${flatModifier > 0 ? '+' : ''}${flatModifier}` : String(flatModifier)
+  }
+
+  return transformed
+}
+
+export function transformCombinedFormula(formula: string, mode: CombinedRollMode): string | null {
+  return serializeParsedFormula(formula, mode)
+}
+
+function formatParsedFormulaBase(parsed: ReturnType<typeof parseFormula>): string {
+  if (!parsed) {
+    return ''
+  }
+
+  const parts = parsed.groups.map((group) => {
+    const keep = group.keep ? `${group.keep.mode}${group.keep.n}` : ''
+    return `${group.count}${group.dieType}${keep}`
+  })
+
+  let baseFormula = parts.join('+')
+
+  if (parsed.flatModifier !== 0) {
+    if (!baseFormula) {
+      baseFormula = String(parsed.flatModifier)
+    } else if (parsed.flatModifier > 0) {
+      baseFormula = `${baseFormula}+${parsed.flatModifier}`
+    } else {
+      baseFormula = `${baseFormula}${parsed.flatModifier}`
+    }
+  }
+
+  return baseFormula
+}
+
+export function transformSavedFormulaRoll(formula: string, mode: SavedFormulaRollMode): string | null {
+  const parsed = parseFormula(formula)
+  if (!parsed) {
+    return null
+  }
+
+  const baseFormula = formatParsedFormulaBase(parsed)
+
+  if (mode === 'normal') {
+    return parsed.canonical
+  }
+
+  if (mode === 'doubleDice') {
+    return serializeParsedFormula(baseFormula, 'doubleDice')
+  }
+
+  return `(${baseFormula})*2`
 }
 
 export function normalizeFormulaState(formula: string): { builderState: FormulaBuilderState; formulaText: string } | null {

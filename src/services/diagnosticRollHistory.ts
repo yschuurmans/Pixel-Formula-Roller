@@ -27,6 +27,7 @@ export function createDiagnosticHistoryEntry(
     parsedFormula: {
       groups: [{ dieType, count: 1 }],
       flatModifier: 0,
+      expression: formulaString,
       raw: formulaString,
       canonical: formulaString,
     },

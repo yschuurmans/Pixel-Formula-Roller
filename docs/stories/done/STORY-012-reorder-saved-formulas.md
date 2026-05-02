@@ -1,5 +1,9 @@
 # STORY-012 — Reorder saved formulas (tap-and-hold-then-drag)
 
+Status: superseded by `STORY-016 — Formula Improvements`
+
+This backlog item has been absorbed into `docs/stories/backlog/STORY-016-formula-improvements.md` so reorder, long-press modal behavior, and formula-card interaction rules are implemented from a single story.
+
 Summary
 
 Allow users to reorder their saved formulas directly in the formula list using a mobile-friendly "tap-and-hold-then-drag" gesture. The new feature should persist ordering and provide accessible fallbacks for keyboard and assistive technology.

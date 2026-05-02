@@ -27,6 +27,11 @@ function LocationDisplay() {
   return <div data-testid="location">{location.pathname}</div>
 }
 
+function LocationStateDisplay() {
+  const location = useLocation()
+  return <div data-testid="location-state">{JSON.stringify(location.state)}</div>
+}
+
 function createHistoryEntry(overrides: Partial<RollHistoryEntry> & Pick<RollHistoryEntry, 'id' | 'total'>): RollHistoryEntry {
   return {
     formulaName: '',
@@ -68,7 +73,7 @@ function renderMainScreen() {
         <Route path="/" element={<><MainScreen /><LocationDisplay /></>} />
         <Route path="/formula/:id" element={<LocationDisplay />} />
         <Route path="/roll/:id" element={<LocationDisplay />} />
-        <Route path="/roll" element={<><FormulaScreen mode="roll-only" /><LocationDisplay /></>} />
+        <Route path="/roll" element={<><FormulaScreen mode="roll-only" /><LocationDisplay /><LocationStateDisplay /></>} />
         <Route path="/formula/new" element={<LocationDisplay />} />
         <Route path="/settings" element={<LocationDisplay />} />
         <Route path="/profiles" element={<LocationDisplay />} />
@@ -131,6 +136,146 @@ describe('MainScreen', () => {
     expect(screen.getByText('8d6')).toBeInTheDocument()
     expect(screen.queryByText('No rolls yet')).not.toBeInTheDocument()
     expect(screen.getByText('Fireball', { selector: 'p' })).toBeInTheDocument()
+  })
+
+  it('opens a saved formula on a quick tap', () => {
+    useAppStore.setState({
+      profiles: {
+        default: {
+          id: 'default',
+          name: 'Default',
+          isCharacter: false,
+          skills: [],
+          formulas: [
+            {
+              id: 'formula-1',
+              name: 'Fireball',
+              formula: '8d6',
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+          history: [],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+      activeProfileId: 'default',
+      savedFormulas: [],
+      rollHistory: [],
+    })
+
+    renderMainScreen()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open formula Fireball' }))
+
+    expect(screen.getByTestId('location')).toHaveTextContent('/roll/formula-1')
+  })
+
+  it('opens the formula roll options modal after a sustained hold and launches the transformed roll', async () => {
+    vi.useFakeTimers()
+    useAppStore.setState({
+      profiles: {
+        default: {
+          id: 'default',
+          name: 'Default',
+          isCharacter: false,
+          skills: [],
+          formulas: [
+            {
+              id: 'formula-1',
+              name: 'Fireball',
+              formula: '1d12+3d6+4',
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+          history: [],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+      activeProfileId: 'default',
+      savedFormulas: [],
+      rollHistory: [],
+    })
+
+    renderMainScreen()
+
+    const formulaButton = screen.getByRole('button', { name: 'Open formula Fireball' })
+    fireEvent.pointerDown(formulaButton, { button: 0, pointerId: 1, clientX: 10, clientY: 10 })
+    vi.advanceTimersByTime(1000)
+    fireEvent.pointerUp(formulaButton, { button: 0, pointerId: 1, clientX: 10, clientY: 10 })
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByText('Choose how to launch this saved formula.')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Double All' }))
+
+    expect(screen.getByTestId('location')).toHaveTextContent('/roll')
+    expect(screen.getByTestId('location-state')).toHaveTextContent('(1d12+3d6+4)*2')
+  })
+
+  it('reorders saved formulas when a held card is dragged past another card', async () => {
+    vi.useFakeTimers()
+    useAppStore.setState({
+      profiles: {
+        default: {
+          id: 'default',
+          name: 'Default',
+          isCharacter: false,
+          skills: [],
+          formulas: [
+            {
+              id: 'formula-1',
+              name: 'Alpha',
+              formula: '1d4',
+              createdAt: 1,
+              updatedAt: 1,
+            },
+            {
+              id: 'formula-2',
+              name: 'Beta',
+              formula: '1d6',
+              createdAt: 2,
+              updatedAt: 2,
+            },
+          ],
+          history: [],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+      activeProfileId: 'default',
+      savedFormulas: [],
+      rollHistory: [],
+    })
+
+    const getBoundingClientRectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const formulaId = this.getAttribute('data-formula-card-id')
+
+      if (formulaId === 'formula-1') {
+        return { top: 0, bottom: 100, left: 0, right: 200, width: 200, height: 100, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+      }
+
+      if (formulaId === 'formula-2') {
+        return { top: 140, bottom: 240, left: 0, right: 200, width: 200, height: 100, x: 0, y: 140, toJSON: () => ({}) } as DOMRect
+      }
+
+      return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+    })
+
+    renderMainScreen()
+
+    const formulaButton = screen.getByRole('button', { name: 'Open formula Alpha' })
+    fireEvent.pointerDown(formulaButton, { button: 0, pointerId: 1, clientX: 10, clientY: 10 })
+    vi.advanceTimersByTime(1000)
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 10, clientY: 220 })
+    fireEvent.pointerUp(window, { pointerId: 1, clientX: 10, clientY: 220 })
+
+    expect(useAppStore.getState().profiles.default.formulas.map((formula) => formula.name)).toEqual(['Beta', 'Alpha'])
+
+    getBoundingClientRectSpy.mockRestore()
   })
 
   it('navigates to the profiles screen from the header', () => {
@@ -311,6 +456,7 @@ describe('MainScreen', () => {
               parsedFormula: {
                 groups: [{ dieType: 'd20', count: 2, keep: { mode: 'kh', n: 1 } }],
                 flatModifier: 5,
+                expression: '2d20kh1+5',
                 raw: '2d20kh1+5',
                 canonical: '2d20kh1+5',
               },
@@ -387,6 +533,201 @@ describe('MainScreen', () => {
     expect(screen.getByRole('dialog')).toHaveTextContent('Stealth')
     fireEvent.click(screen.getByRole('button', { name: 'Advantage' }))
     expect(screen.getByTestId('location')).toHaveTextContent('/roll')
+  })
+
+  it('selects formulas and launches a combined roll on tap', () => {
+    useAppStore.setState({
+      profiles: {
+        default: {
+          id: 'default',
+          name: 'Default',
+          isCharacter: false,
+          skills: [],
+          formulas: [
+            {
+              id: 'formula-1',
+              name: 'Attack',
+              formula: '1d20+3',
+              createdAt: 1,
+              updatedAt: 1,
+            },
+            {
+              id: 'formula-2',
+              name: 'Damage',
+              formula: '4d12+1',
+              createdAt: 2,
+              updatedAt: 2,
+            },
+          ],
+          history: [],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+      activeProfileId: 'default',
+      savedFormulas: [],
+      rollHistory: [],
+    })
+
+    renderMainScreen()
+
+    expect(screen.queryByRole('button', { name: 'Roll selected formulas' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByLabelText('Select Attack for combined roll'))
+    fireEvent.click(screen.getByLabelText('Select Damage for combined roll'))
+
+    const rollButton = screen.getByRole('button', { name: 'Roll selected formulas' })
+    expect(rollButton).toBeInTheDocument()
+
+    fireEvent.click(rollButton)
+
+    expect(screen.getByRole('heading', { name: 'Combined Roll' })).toBeInTheDocument()
+    expect(screen.getByText('1d20+3+4d12+1')).toBeInTheDocument()
+    expect(screen.getByTestId('location-state')).toHaveTextContent('"name":"Combined Roll"')
+    expect(screen.getByTestId('location-state')).toHaveTextContent('"formulaText":"1d20+3+4d12+1"')
+  })
+
+  it('opens the combined-roll modal on a long press and applies a doubled formula variant', () => {
+    vi.useFakeTimers()
+
+    useAppStore.setState({
+      profiles: {
+        default: {
+          id: 'default',
+          name: 'Default',
+          isCharacter: false,
+          skills: [],
+          formulas: [
+            {
+              id: 'formula-1',
+              name: 'Attack',
+              formula: '1d20+3',
+              createdAt: 1,
+              updatedAt: 1,
+            },
+            {
+              id: 'formula-2',
+              name: 'Damage',
+              formula: '4d12+1',
+              createdAt: 2,
+              updatedAt: 2,
+            },
+          ],
+          history: [],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+      activeProfileId: 'default',
+      savedFormulas: [],
+      rollHistory: [],
+    })
+
+    renderMainScreen()
+
+    fireEvent.click(screen.getByLabelText('Select Attack for combined roll'))
+    fireEvent.click(screen.getByLabelText('Select Damage for combined roll'))
+
+    const rollButton = screen.getByRole('button', { name: 'Roll selected formulas' })
+    fireEvent.mouseDown(rollButton)
+    vi.advanceTimersByTime(999)
+    expect(screen.queryByRole('dialog', { name: /Combined Roll/i })).not.toBeInTheDocument()
+    vi.advanceTimersByTime(1)
+
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('Combined Roll')).toBeInTheDocument()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Double Dice' }))
+
+    expect(screen.getByRole('heading', { name: 'Combined Roll' })).toBeInTheDocument()
+    expect(screen.getByText('2d20+8d12+4')).toBeInTheDocument()
+  })
+
+  it('clears combined selection when a selected formula is deleted', () => {
+    useAppStore.setState({
+      profiles: {
+        default: {
+          id: 'default',
+          name: 'Default',
+          isCharacter: false,
+          skills: [],
+          formulas: [
+            {
+              id: 'formula-1',
+              name: 'Attack',
+              formula: '1d20+3',
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+          history: [],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+      activeProfileId: 'default',
+      savedFormulas: [],
+      rollHistory: [],
+    })
+
+    renderMainScreen()
+
+    fireEvent.click(screen.getByLabelText('Select Attack for combined roll'))
+    expect(screen.getByRole('button', { name: 'Roll selected formulas' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByLabelText('More options for Attack'))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+    expect(screen.queryByRole('button', { name: 'Roll selected formulas' })).not.toBeInTheDocument()
+  })
+
+  it('clears combined selection when the active profile changes', () => {
+    useAppStore.setState({
+      profiles: {
+        default: {
+          id: 'default',
+          name: 'Default',
+          isCharacter: false,
+          skills: [],
+          formulas: [
+            {
+              id: 'formula-1',
+              name: 'Attack',
+              formula: '1d20+3',
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+          history: [],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+        alt: {
+          id: 'alt',
+          name: 'Alt',
+          isCharacter: false,
+          skills: [],
+          formulas: [],
+          history: [],
+          createdAt: 2,
+          updatedAt: 2,
+        },
+      },
+      activeProfileId: 'default',
+      savedFormulas: [],
+      rollHistory: [],
+    })
+
+    renderMainScreen()
+
+    fireEvent.click(screen.getByLabelText('Select Attack for combined roll'))
+    expect(screen.getByRole('button', { name: 'Roll selected formulas' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open profiles' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Select' }))
+
+    expect(screen.queryByRole('button', { name: 'Roll selected formulas' })).not.toBeInTheDocument()
   })
 
   it('shows a toast passed through navigation state', () => {

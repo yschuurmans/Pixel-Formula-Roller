@@ -9,6 +9,8 @@ export interface DiceGroup {
 export interface ParsedFormula {
   groups: DiceGroup[];
   flatModifier: number;
+  multiplier?: number;
+  expression: string;
   raw: string;
   canonical: string;
 }

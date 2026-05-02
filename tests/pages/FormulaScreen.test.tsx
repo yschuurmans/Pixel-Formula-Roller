@@ -442,6 +442,23 @@ describe('FormulaScreen', () => {
     })
   })
 
+  it('renders a combined roll session launched from the main screen', () => {
+    renderFormulaScreen([
+      '/',
+      {
+        pathname: '/roll',
+        state: {
+          formulaText: '2d20+8d12+4',
+          name: 'Combined Roll',
+          focusRollEngine: true,
+        },
+      },
+    ])
+
+    expect(screen.getByRole('heading', { name: 'Combined Roll' })).toBeInTheDocument()
+    expect(screen.getByText('8d12+2d20+4')).toBeInTheDocument()
+  })
+
   it('renders a saved formula in roll-only mode and auto-hides it after 10 seconds', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-27T12:00:00.000Z'))

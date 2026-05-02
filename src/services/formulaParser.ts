@@ -32,6 +32,12 @@ const MAX_TOTAL_DICE = 100;
 const MAX_MODIFIER = 9999;
 
 const DIE_ORDER: DieType[] = ['d4', 'd6', 'd8', 'd10', 'd12', 'd20', 'd100'];
+const TOKEN_RE = /(\d+d(?:\d+|%)(?:kh|kl)?\d*|\d+|[()+\-*/])/y;
+const DICE_TOKEN_RE = /^\d+d(?:\d+|%)(?:kh|kl)?\d*$/i;
+
+type ParsedToken =
+  | { kind: 'dice'; text: string; canonical: string; groupIndex: number }
+  | { kind: 'number' | 'operator' | 'paren'; text: string };
 
 /** Map die sides number (or '%') to our DieType token. Returns null for unsupported die types. */
 function sidesToDieType(sides: number | string): DieType | null {
@@ -46,6 +52,66 @@ function sidesToDieType(sides: number | string): DieType | null {
   };
   if (typeof sides === 'number' && sides in map) return map[sides];
   return null;
+}
+
+function normalizeFormulaInput(formula: string): string {
+  return formula
+    .trim()
+    .replace(/d%/gi, 'd100')
+    .replace(/(^|[^0-9])d(\d+)/g, '$11d$2')
+    .replace(/\s+/g, '');
+}
+
+function tokenizeFormula(formula: string): ParsedToken[] | null {
+  const tokens: ParsedToken[] = [];
+  let cursor = 0;
+  let groupIndex = 0;
+
+  TOKEN_RE.lastIndex = 0;
+
+  while (cursor < formula.length) {
+    TOKEN_RE.lastIndex = cursor;
+    const match = TOKEN_RE.exec(formula);
+    if (!match || match.index !== cursor) {
+      return null;
+    }
+
+    const text = match[1];
+    cursor = TOKEN_RE.lastIndex;
+
+    if (DICE_TOKEN_RE.test(text)) {
+      tokens.push({ kind: 'dice', text, canonical: text, groupIndex });
+      groupIndex += 1;
+      continue;
+    }
+
+    if (/^\d+$/.test(text)) {
+      tokens.push({ kind: 'number', text });
+      continue;
+    }
+
+    if (text === '(' || text === ')') {
+      tokens.push({ kind: 'paren', text });
+      continue;
+    }
+
+    tokens.push({ kind: 'operator', text });
+  }
+
+  return tokens;
+}
+
+function evaluateArithmeticExpression(expression: string): number | null {
+  if (!/^[0-9+\-*/().\s]+$/.test(expression)) {
+    return null;
+  }
+
+  try {
+    const evaluated = Function(`"use strict"; return (${expression});`)();
+    return typeof evaluated === 'number' && Number.isFinite(evaluated) ? evaluated : null;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -65,111 +131,102 @@ function sidesToDieType(sides: number | string): DieType | null {
  *       - modifier clamped to ±9999
  */
 export function parseFormula(formula: string): ParsedFormula | null {
-  // Normalise: trim whitespace, replace d% with 1d100, insert implicit 1 before bare dN
-  const normalised = formula
-    .trim()
-    .replace(/d%/gi, 'd100')
-    // Insert "1" before a bare "d" that isn't already preceded by a digit
-    // e.g. "d6" → "1d6", "+d8" → "+1d8", but "2d6" is unchanged
-    // Capture the non-digit prefix (or start-of-string) to preserve it
-    .replace(/(^|[^0-9])d(\d+)/g, '$11d$2');
-
-  if (!normalised) return null;
-
-  // Validate with rpg-dice-roller (parsing only — we throw away the roll result values)
-  let diceRoll: DiceRoll;
-  try {
-    diceRoll = new DiceRoll(normalised);
-  } catch {
+  const normalised = normalizeFormulaInput(formula);
+  if (!normalised) {
+    return null;
+  }
+  const tokens = tokenizeFormula(normalised);
+  if (!tokens || tokens.length === 0) {
     return null;
   }
 
-  // The canonical string is the notation stored inside the DiceRoll object.
-  // rpg-dice-roller stores the input notation as-is (it does not reformat it).
-  const canonical = diceRoll.notation;
-
-  // Extract groups and flat modifier from the canonical notation string.
-  // Supported patterns:
-  //   <count>d<sides>                  e.g. "2d6", "1d20"
-  //   <count>d<sides>kh<n>             e.g. "2d20kh1"
-  //   <count>d<sides>kl<n>             e.g. "3d6kl1"
-  //   <count>d%                        (already normalised to 1d100 above)
-  //   [+-]<number>                     flat modifier
-  //
-  // We scan the normalised notation left-to-right.
-  // Note: the leading token has no explicit '+' sign.
-
   const groups: DiceGroup[] = [];
-  let flatModifier = 0;
+  const expressionParts: string[] = [];
+  const canonicalParts: string[] = [];
 
-  // Tokenise: each token is either a dice group or a flat number, separated by operators
-  // Pattern captures: (sign)(count)d(sides)(optional keep mode)(optional keep n)
-  //               or: (sign)(flat number)
-  const TOKEN_RE = /([+-]?)\s*(\d+)d(\d+|%)(kh|kl)?(\d+)?|([+-]?\s*\d+)(?!\s*d)/gi;
+  let previousToken: ParsedToken | null = null;
 
-  let match: RegExpExecArray | null;
-
-  // Reset lastIndex for safety
-  TOKEN_RE.lastIndex = 0;
-
-  while ((match = TOKEN_RE.exec(canonical)) !== null) {
-    // Groups: [full, diceSign, countStr, sidesStr, keepMode, keepNStr, flatStr]
-    const diceSign = match[1]?.replace(/\s/g, '') ?? '';
-    const countStr = match[2];
-    const sidesStr = match[3];
-    const keepMode = match[4];
-    const keepNStr = match[5];
-    const flatStr = match[6];
-
-    if (countStr !== undefined && sidesStr !== undefined) {
-      if (diceSign === '-') {
+  for (const token of tokens) {
+    if (token.kind === 'dice') {
+      if (previousToken?.kind === 'operator' && previousToken.text === '-') {
         return null;
       }
 
-      // Dice group token
-      const sidesValue = sidesStr === '%' ? '%' : parseInt(sidesStr, 10);
+      const diceRoll = new DiceRoll(token.text);
+      const dieToken = diceRoll.notation;
+      const diceMatch = dieToken.match(/^(\d+)d(\d+|%)(kh|kl)?(\d+)?$/i);
+      if (!diceMatch) {
+        return null;
+      }
+
+      const sidesValue = diceMatch[2] === '%' ? '%' : parseInt(diceMatch[2], 10);
       const dieType = sidesToDieType(sidesValue);
-
       if (!dieType) {
-        // Unsupported die type (e.g. d3, d7) — reject the formula
         return null;
       }
 
-      const count = parseInt(countStr, 10);
+      const count = parseInt(diceMatch[1], 10);
       const group: DiceGroup = { dieType, count };
-
-      if (keepMode && keepNStr) {
+      if (diceMatch[3] && diceMatch[4]) {
         group.keep = {
-          mode: keepMode as 'kh' | 'kl',
-          n: parseInt(keepNStr, 10),
+          mode: diceMatch[3] as 'kh' | 'kl',
+          n: parseInt(diceMatch[4], 10),
         };
       }
 
       groups.push(group);
-    } else if (flatStr !== undefined) {
-      // Flat modifier token
-      const num = parseInt(flatStr.replace(/\s/g, ''), 10);
-      if (!isNaN(num)) {
-        flatModifier += num;
-      }
+      expressionParts.push(`__g${token.groupIndex}__`);
+      canonicalParts.push(dieToken);
+      previousToken = token;
+      continue;
     }
+
+    expressionParts.push(token.text);
+    canonicalParts.push(token.text);
+    previousToken = token;
   }
 
-  // Must have at least one dice group to be a valid dice formula
-  if (groups.length === 0) return null;
+  if (groups.length === 0) {
+    return null;
+  }
 
-  // Validate complexity limits
   let totalDice = 0;
   for (const group of groups) {
-    if (group.count > MAX_DICE_PER_GROUP) return null; // max 20 dice per group
+    if (group.count > MAX_DICE_PER_GROUP) return null;
     totalDice += group.count;
   }
-  if (totalDice > MAX_TOTAL_DICE) return null; // max 100 total dice
-  if (Math.abs(flatModifier) > MAX_MODIFIER) return null; // modifier ±9999
+  if (totalDice > MAX_TOTAL_DICE) return null;
+
+  const expression = expressionParts.join('');
+  const canonical = canonicalParts.join('');
+
+  let flatModifier = 0;
+  const hasMultiplicationOrDivision = tokens.some((token) => token.kind === 'operator' && (token.text === '*' || token.text === '/'));
+  if (!hasMultiplicationOrDivision) {
+    const constantExpression = expression.replace(/__g\d+__/g, '0');
+    const constantValue = evaluateArithmeticExpression(constantExpression);
+    if (constantValue === null) {
+      return null;
+    }
+    flatModifier = constantValue;
+  }
+
+  if (Math.abs(flatModifier) > MAX_MODIFIER) return null;
+
+  let multiplier: number | undefined;
+  const topLevelMultiplierMatch = canonical.match(/^\((.+)\)\*(\d+(?:\.\d+)?)$/);
+  if (topLevelMultiplierMatch) {
+    const multiplierValue = Number(topLevelMultiplierMatch[2]);
+    if (Number.isFinite(multiplierValue) && multiplierValue >= 1) {
+      multiplier = multiplierValue;
+    }
+  }
 
   return {
     groups,
     flatModifier,
+    multiplier,
+    expression,
     raw: formula,
     canonical,
   };
@@ -195,7 +252,7 @@ export function evaluateFormula(
 ): EvaluationResult {
   const groupResults: GroupResult[] = [];
   let rollIndex = 0;
-  let total = parsed.flatModifier;
+  const groupTotals: number[] = [];
 
   for (const group of parsed.groups) {
     const groupRolls = rolls.slice(rollIndex, rollIndex + group.count);
@@ -230,12 +287,30 @@ export function evaluateFormula(
       }));
     }
 
-    // Add kept faces to the running total
+    let groupTotal = 0;
     for (const roll of resultRolls) {
-      if (roll.kept) total += roll.face;
+      if (roll.kept) groupTotal += roll.face;
     }
 
+    groupTotals.push(groupTotal);
+
     groupResults.push({ dieType: group.dieType, rolls: resultRolls });
+  }
+
+  let total: number;
+  try {
+    const substituted = parsed.expression.replace(/__g(\d+)__/g, (_, index: string) => String(groupTotals[Number(index)] ?? 0));
+    const evaluatedTotal = evaluateArithmeticExpression(substituted);
+    if (evaluatedTotal === null) {
+      return {
+        groups: groupResults,
+        flatModifier: parsed.flatModifier,
+        total: parsed.flatModifier,
+      };
+    }
+    total = evaluatedTotal;
+  } catch {
+    total = parsed.flatModifier + groupTotals.reduce((sum, groupTotal) => sum + groupTotal, 0);
   }
 
   return {

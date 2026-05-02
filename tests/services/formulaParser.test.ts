@@ -103,6 +103,20 @@ describe('parseFormula', () => {
       expect(result!.flatModifier).toBe(-2);
     });
 
+    it('parses a parenthesized multiplier variant', () => {
+      const result = parseFormula('(1d12+3d6+4)*2');
+      expect(result).not.toBeNull();
+      expect(result!.multiplier).toBe(2);
+      expect(result!.flatModifier).toBe(0);
+      expect(result!.canonical).toBe('(1d12+3d6+4)*2');
+    });
+
+    it('parses division inside a grouped expression', () => {
+      const result = parseFormula('(1d8+4)/2');
+      expect(result).not.toBeNull();
+      expect(result!.canonical).toBe('(1d8+4)/2');
+    });
+
     it('parses all supported die types', () => {
       const types = ['1d4', '1d6', '1d8', '1d10', '1d12', '1d20', '1d100'];
       for (const t of types) {
@@ -236,6 +250,20 @@ describe('evaluateFormula', () => {
     const result = evaluateFormula(parsed, rolls);
     expect(result.total).toBe(2); // 4 - 2
     expect(result.flatModifier).toBe(-2);
+  });
+
+  it('multiplies the evaluated total when a multiplier is present', () => {
+    const parsed = parseFormula('(1d6+3)*2')!;
+    const rolls: DieRollResult[] = [roll(4, 'd6')];
+    const result = evaluateFormula(parsed, rolls);
+    expect(result.total).toBe(14);
+  });
+
+  it('evaluates division in a grouped expression', () => {
+    const parsed = parseFormula('(1d8+4)/2')!;
+    const rolls: DieRollResult[] = [roll(6, 'd8')];
+    const result = evaluateFormula(parsed, rolls);
+    expect(result.total).toBe(5);
   });
 });
 
