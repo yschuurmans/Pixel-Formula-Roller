@@ -115,6 +115,15 @@ function serializeParsedFormula(formula: string, mode: CombinedRollMode): string
 }
 
 export function transformCombinedFormula(formula: string, mode: CombinedRollMode): string | null {
+  const parsed = parseFormula(formula)
+  if (!parsed) {
+    return null
+  }
+
+  if (mode === 'doubleAll') {
+    return `(${parsed.canonical})*2`
+  }
+
   return serializeParsedFormula(formula, mode)
 }
 
@@ -149,17 +158,16 @@ export function transformSavedFormulaRoll(formula: string, mode: SavedFormulaRol
     return null
   }
 
-  const baseFormula = formatParsedFormulaBase(parsed)
-
   if (mode === 'normal') {
     return parsed.canonical
   }
 
   if (mode === 'doubleDice') {
+    const baseFormula = formatParsedFormulaBase(parsed)
     return serializeParsedFormula(baseFormula, 'doubleDice')
   }
 
-  return `(${baseFormula})*2`
+  return `(${parsed.canonical})*2`
 }
 
 export function normalizeFormulaState(formula: string): { builderState: FormulaBuilderState; formulaText: string } | null {
@@ -169,7 +177,7 @@ export function normalizeFormulaState(formula: string): { builderState: FormulaB
   const builderState = builderStateFromFormula(parsed.canonical)
   return {
     builderState,
-    formulaText: buildFormulaFromState(builderState),
+    formulaText: parsed.canonical,
   }
 }
 

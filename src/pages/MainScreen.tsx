@@ -129,7 +129,7 @@ export default function MainScreen() {
           <section className="border-2 border-[#8a72a8] bg-[#15111a] p-4 shadow-[6px_6px_0_0_#09070d]">
             <div className="mb-4 flex items-center justify-between gap-3">
               <h2 className="text-sm text-[#f7ead4]">Saved Formulas</h2>
-              <p className="text-[9px] text-[#c5b7d8]">Tap a card to roll</p>
+              <p className="text-[9px] text-[#c5b7d8]">Tap a card to toggle selection</p>
             </div>
 
             {vm.savedFormulas.length === 0 ? (
@@ -159,13 +159,22 @@ export default function MainScreen() {
                     >
                       <button
                         type="button"
-                        onPointerDown={(event) => vm.handleFormulaCardPointerDown(formula.id, event)}
+                        onPointerDown={(event) => {
+                          if (event.button !== 0) {
+                            return
+                          }
+
+                          vm.handleFormulaCardHoldStart(formula.id)
+                        }}
+                        onPointerUp={vm.handleFormulaCardHoldEnd}
+                        onPointerCancel={vm.handleFormulaCardHoldEnd}
+                        onPointerLeave={vm.handleFormulaCardHoldEnd}
                         onClick={() => {
                           vm.closeFormulaMenu()
                           vm.handleFormulaCardClick(formula.id)
                         }}
                         onContextMenu={(event) => event.preventDefault()}
-                        aria-label={`Open formula ${formula.name}`}
+                        aria-label={`Toggle selection for ${formula.name}`}
                         className="block w-full pr-12 pb-8 text-left"
                       >
                         <h3 className="text-sm leading-snug text-[#f7ead4]">{formula.name}</h3>
@@ -174,9 +183,11 @@ export default function MainScreen() {
 
                       <button
                         type="button"
-                        onClick={() => vm.openFormulaMenu(formula.id)}
+                        onPointerDown={(event) => vm.handleFormulaCardPointerDown(formula.id, event)}
+                        onClick={() => vm.handleFormulaCardMenuClick(formula.id)}
                         aria-label={`More options for ${formula.name}`}
-                        className="absolute right-2 top-2 border border-[#7d6b95] bg-[#2b2136] px-2 py-1 text-xs leading-none text-[#f7ead4]"
+                        className="absolute right-2 top-2 cursor-grab select-none border border-[#7d6b95] bg-[#2b2136] px-2 py-1 text-xs leading-none text-[#f7ead4] active:cursor-grabbing"
+                        style={{ touchAction: 'none' }}
                       >
                         ⋮
                       </button>

@@ -80,6 +80,8 @@ export function useMainScreenController() {
   const quickConnectHoldTimer = useRef<number | null>(null)
   const quickConnectHoldTriggered = useRef(false)
   const formulaHoldTimer = useRef<number | null>(null)
+  const formulaCardHoldTimer = useRef<number | null>(null)
+  const formulaReorderInteractionActive = useRef(false)
   const formulaHoldState = useRef<FormulaHoldState | null>(null)
   const formulaHoldSuppressClick = useRef(false)
   const formulaDragTargetIndex = useRef<number | null>(null)
@@ -308,6 +310,13 @@ export function useMainScreenController() {
     }
   }, [])
 
+  const clearFormulaCardHoldTimer = useCallback(() => {
+    if (formulaCardHoldTimer.current !== null) {
+      window.clearTimeout(formulaCardHoldTimer.current)
+      formulaCardHoldTimer.current = null
+    }
+  }, [])
+
   const clearFormulaHoldListeners = useCallback(() => {
     formulaHoldListenersCleanup.current?.()
     formulaHoldListenersCleanup.current = null
@@ -315,13 +324,15 @@ export function useMainScreenController() {
 
   const resetFormulaInteractionState = useCallback(() => {
     clearFormulaHoldTimer()
+    clearFormulaCardHoldTimer()
     clearFormulaHoldListeners()
+    formulaReorderInteractionActive.current = false
     formulaHoldState.current = null
     formulaHoldSuppressClick.current = false
     formulaDragTargetIndex.current = null
     setDraggingFormulaId(null)
     setDragTargetFormulaId(null)
-  }, [clearFormulaHoldListeners, clearFormulaHoldTimer])
+  }, [clearFormulaCardHoldTimer, clearFormulaHoldListeners, clearFormulaHoldTimer])
 
   const openFormulaRollPrompt = useCallback((formulaId: string) => {
     setFormulaRollPromptFormulaId(formulaId)
@@ -330,6 +341,26 @@ export function useMainScreenController() {
   const closeFormulaRollPrompt = useCallback(() => {
     setFormulaRollPromptFormulaId(null)
   }, [])
+
+  const handleFormulaCardHoldStart = useCallback(
+    (formulaId: string) => {
+      if (formulaReorderInteractionActive.current) {
+        return
+      }
+
+      clearFormulaCardHoldTimer()
+      formulaCardHoldTimer.current = window.setTimeout(() => {
+        formulaCardHoldTimer.current = null
+        formulaHoldSuppressClick.current = true
+        openFormulaRollPrompt(formulaId)
+      }, FORMULA_CARD_HOLD_MS)
+    },
+    [clearFormulaCardHoldTimer, openFormulaRollPrompt],
+  )
+
+  const handleFormulaCardHoldEnd = useCallback(() => {
+    clearFormulaCardHoldTimer()
+  }, [clearFormulaCardHoldTimer])
 
   const updateFormulaDragTarget = useCallback(
     (clientY: number) => {
@@ -428,6 +459,7 @@ export function useMainScreenController() {
       formulaDragTargetIndex.current = null
       setDraggingFormulaId(null)
       setDragTargetFormulaId(null)
+      formulaReorderInteractionActive.current = false
     }
 
     const handlePointerCancel = (event: PointerEvent) => {
@@ -451,7 +483,9 @@ export function useMainScreenController() {
         return
       }
 
+      event.preventDefault()
       resetFormulaInteractionState()
+      formulaReorderInteractionActive.current = true
       formulaHoldSuppressClick.current = false
       formulaHoldState.current = {
         formulaId,
@@ -488,9 +522,26 @@ export function useMainScreenController() {
         return
       }
 
-      navigate(`/roll/${formulaId}`)
+      if (selectedFormulaIds.length === 0) {
+        navigate(`/roll/${formulaId}`)
+        return
+      }
+
+      toggleCombinedFormulaSelection(formulaId)
     },
-    [navigate],
+    [navigate, selectedFormulaIds.length, toggleCombinedFormulaSelection],
+  )
+
+  const handleFormulaCardMenuClick = useCallback(
+    (formulaId: string) => {
+      if (formulaHoldSuppressClick.current) {
+        formulaHoldSuppressClick.current = false
+        return
+      }
+
+      setActiveMenuId((current) => (current === formulaId ? null : formulaId))
+    },
+    [],
   )
 
   const handleFormulaRollPromptChoose = useCallback(
@@ -825,6 +876,8 @@ export function useMainScreenController() {
     handleCharacterSkillLongPress,
     handleCharacterPromptChoose,
     closeCharacterPrompt,
+    handleFormulaCardHoldStart,
+    handleFormulaCardHoldEnd,
     toggleCombinedFormulaSelection,
     handleCombinedRollTap,
     handleCombinedRollLongPress,
@@ -832,6 +885,7 @@ export function useMainScreenController() {
     closeCombinedRollPrompt,
     handleFormulaCardPointerDown,
     handleFormulaCardClick,
+    handleFormulaCardMenuClick,
     handleFormulaRollPromptChoose,
     closeFormulaRollPrompt,
     handleQuickConnectClick,
