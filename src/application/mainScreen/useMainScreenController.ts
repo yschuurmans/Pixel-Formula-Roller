@@ -52,6 +52,7 @@ export function useMainScreenController() {
   const deleteSavedFormula = useAppStore((state) => state.deleteSavedFormula)
   const moveSavedFormula = useAppStore((state) => state.moveSavedFormula)
   const clearBleError = useAppStore((state) => state.clearBleError)
+  const diagnosticPendingWindow = useAppStore((state) => state.diagnosticPendingWindow)
   const createProfile = useAppStore((state) => state.createProfile)
   const renameProfile = useAppStore((state) => state.renameProfile)
   const deleteProfile = useAppStore((state) => state.deleteProfile)
@@ -891,5 +892,6 @@ export function useMainScreenController() {
     handleQuickConnectClick,
     handleQuickConnectHoldStart,
     handleQuickConnectHoldEnd,
+    diagnosticPendingWindow,
   }
 }

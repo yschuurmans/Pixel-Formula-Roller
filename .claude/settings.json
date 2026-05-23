@@ -3,7 +3,8 @@
     "allow": [
       "Bash(npm test *)",
       "Bash(adb devices *)",
-      "Bash(npx cap run android *)"
+      "Bash(npx cap run android *)",
+      "Bash(npx tsc --noEmit*)"
     ]
   }
 }

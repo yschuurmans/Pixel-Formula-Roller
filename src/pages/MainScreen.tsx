@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { formatDistanceToNow } from 'date-fns'
 import {
   ROLL_HISTORY_STORAGE_LIMIT,
@@ -33,13 +34,35 @@ function HistoryItem({
   label,
   total,
   rolledAt,
+  windowExpiresAt,
   onClick,
 }: {
   label: string
   total: number
   rolledAt: number
+  windowExpiresAt?: number | null
   onClick: () => void
 }) {
+  const [secsLeft, setSecsLeft] = useState<number | null>(() =>
+    windowExpiresAt ? Math.ceil((windowExpiresAt - Date.now()) / 1000) : null,
+  )
+
+  useEffect(() => {
+    if (!windowExpiresAt) {
+      setSecsLeft(null)
+      return
+    }
+
+    const update = () => {
+      const remaining = Math.ceil((windowExpiresAt - Date.now()) / 1000)
+      setSecsLeft(remaining > 0 ? remaining : null)
+    }
+
+    update()
+    const id = window.setInterval(update, 100)
+    return () => window.clearInterval(id)
+  }, [windowExpiresAt])
+
   return (
     <li>
       <button
@@ -51,6 +74,9 @@ function HistoryItem({
           <p className="truncate text-[11px] text-[#f7ead4]">{label}</p>
           <p className="truncate text-[9px] text-[#c5b7d8]">
             {formatDistanceToNow(rolledAt, { addSuffix: true })}
+            {secsLeft !== null && secsLeft > 0 ? (
+              <span className="ml-2 text-[#86efac]">+{secsLeft}s</span>
+            ) : null}
           </p>
         </div>
         <p className="self-start whitespace-nowrap text-sm text-[#ffd166]">{total}</p>
@@ -266,6 +292,7 @@ export default function MainScreen() {
                       label={entry.formulaName || entry.formulaString}
                       total={entry.total}
                       rolledAt={entry.rolledAt}
+                      windowExpiresAt={vm.diagnosticPendingWindow?.entryId === entry.id ? vm.diagnosticPendingWindow.expiresAt : null}
                       onClick={() => vm.openHistoryEntry(entry)}
                     />
                   ))}
@@ -619,6 +646,7 @@ export default function MainScreen() {
                     label={entry.formulaName || entry.formulaString}
                     total={entry.total}
                     rolledAt={entry.rolledAt}
+                    windowExpiresAt={vm.diagnosticPendingWindow?.entryId === entry.id ? vm.diagnosticPendingWindow.expiresAt : null}
                     onClick={() => {
                       vm.closeHistoryDialog()
                       vm.openHistoryEntry(entry)

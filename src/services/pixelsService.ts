@@ -553,6 +553,9 @@ export class PixelsService {
     this.batteryHighlightController = controller
 
     const runCycle = async () => {
+      // Dice confirmed full-battery are skipped from reconnect for the entire cycle run.
+      const fullBatterySkipped = new Set<string>()
+
       try {
         while (!controller.signal.aborted) {
           const pairedIds = this.store.getState().pairedPixelIds
@@ -564,7 +567,7 @@ export class PixelsService {
           const seenThisCycle = new Set<string>()
 
           // 1) Attempt to connect any die not currently connected in parallel (batched)
-          const toEnsureConnected = pairedIds.filter((id) => !this.pixels.has(id))
+          const toEnsureConnected = pairedIds.filter((id) => !this.pixels.has(id) && !fullBatterySkipped.has(id))
           if (toEnsureConnected.length > 0) {
             try {
               await this.connectRememberedDice(toEnsureConnected, { suppressErrors: true, continueOnError: true }, 'battery-highlight-ensure-connected')
@@ -573,8 +576,8 @@ export class PixelsService {
             }
           }
 
-          // 2) Read battery for all paired dice and collect actions in parallel
-          const readPromises = pairedIds.map(async (pixelId) => {
+          // 2) Read battery for all paired dice (excluding full-battery-skipped) and collect actions in parallel
+          const readPromises = pairedIds.filter((id) => !fullBatterySkipped.has(id)).map(async (pixelId) => {
             if (controller.signal.aborted) return null
 
             // mark as seen (we attempted to read it)
@@ -630,8 +633,12 @@ export class PixelsService {
             toGlow.push({ pixelId, color: glowColor })
           }
 
-          // 3) Disconnect any fully-charged dice in parallel
+          // 3) Disconnect any fully-charged dice in parallel and mark them so they are
+          // not reconnected in subsequent cycle iterations.
           if (toDisconnect.length > 0) {
+            for (const id of toDisconnect) {
+              fullBatterySkipped.add(id)
+            }
             try {
               await this.disconnectDice(toDisconnect, 'battery-full-disconnect')
             } catch {}
@@ -984,16 +991,9 @@ export class PixelsService {
   }
 }
 
-function normalizeRollFace(dieType: DieType, face: number): number {
-  if (dieType !== 'd100') {
-    return face
-  }
-
-  // VERIFY: d100 face range assumed 0-99 from SDK and normalized to 1-100 here.
-  if (face >= 0 && face <= 99) {
-    return face + 1
-  }
-
+function normalizeRollFace(_dieType: DieType, face: number): number {
+  // d100 (tens die) reports 0, 10, 20, ..., 90 directly from the SDK — no offset needed.
+  // The 00+0=100 special case is handled at aggregation time in diagnosticRollHistory.
   return face
 }
 

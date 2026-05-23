@@ -53,6 +53,7 @@ interface AppState {
   pixels: Record<string, PixelEntry>;
   bleAvailable: boolean;
   bleError: string | null;
+  diagnosticPendingWindow: { entryId: string; expiresAt: number } | null;
 }
 
 interface AppActions {
@@ -62,6 +63,7 @@ interface AppActions {
   deleteSavedFormula: (id: string) => void;
   moveSavedFormula: (id: string, targetIndex: number) => boolean;
   addRollHistory: (entry: RollHistoryEntry) => void;
+  updateRollHistory: (id: string, entry: RollHistoryEntry) => void;
   clearRollHistory: () => void;
   createProfile: (name: string) => string | null;
   renameProfile: (profileId: string, name: string) => boolean;
@@ -83,6 +85,7 @@ interface AppActions {
   setBleError: (error: string | null) => void;
   clearBleError: () => void;
   setSettings: (settings: AppSettings) => void;
+  setDiagnosticPendingWindow: (window: { entryId: string; expiresAt: number } | null) => void;
 }
 
 const defaultSettings: AppSettings = {
@@ -350,6 +353,7 @@ export const useAppStore = create<AppState & AppActions>()(
       pixels: {},
       bleAvailable: true,
       bleError: null,
+      diagnosticPendingWindow: null,
 
       setSavedFormulas: (formulas) =>
         set((state) => updateActiveProfile(state, (profile) => ({
@@ -413,6 +417,16 @@ export const useAppStore = create<AppState & AppActions>()(
           history: [entry, ...profile.history].slice(0, ROLL_HISTORY_STORAGE_LIMIT),
           updatedAt: Date.now(),
         }))),
+      updateRollHistory: (id, entry) =>
+        set((state) => updateActiveProfile(state, (profile) => {
+          const idx = profile.history.findIndex((h) => h.id === id)
+          if (idx < 0) {
+            return profile
+          }
+          const nextHistory = [...profile.history]
+          nextHistory[idx] = entry
+          return { ...profile, history: nextHistory, updatedAt: Date.now() }
+        })),
       clearRollHistory: () =>
         set((state) => updateActiveProfile(state, (profile) => ({
           ...profile,
@@ -854,6 +868,7 @@ export const useAppStore = create<AppState & AppActions>()(
       setBleError: (error) => set({ bleError: error }),
       clearBleError: () => set({ bleError: null }),
       setSettings: (settings) => set({ settings }),
+      setDiagnosticPendingWindow: (window) => set({ diagnosticPendingWindow: window }),
     }),
     {
       name: 'pixel-formula-roller',
